@@ -19,6 +19,10 @@ struct ContentView: View {
                 Text("All open (\(store.pullRequests.count))").tag(true)
             }
             .pickerStyle(.segmented)
+            .onChange(of: showAll) { was, now in
+                // Leaving the Unread tab counts as having seen what was listed there.
+                if !was && now { store.markAllRead() }
+            }
             .labelsHidden()
             .padding([.horizontal, .top], 12)
             HStack(alignment: .bottom, spacing: 12) {
