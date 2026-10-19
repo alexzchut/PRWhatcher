@@ -1,6 +1,14 @@
 import SwiftUI
 import PRWatcherCore
 
+extension VerticalAlignment {
+    private enum TitleLine: AlignmentID {
+        static func defaultValue(in d: ViewDimensions) -> CGFloat { d[VerticalAlignment.center] }
+    }
+    /// Centre of the first line of a PR title; the status/review cells align to it.
+    static let titleLine = VerticalAlignment(TitleLine.self)
+}
+
 enum Col {
     static let repo: CGFloat = 130
     static let status: CGFloat = 125
@@ -124,13 +132,14 @@ struct PRRow: View {
             store.markRead(pr)
             NSWorkspace.shared.open(pr.url)
         } label: {
-            HStack(alignment: .top, spacing: 8) {
+            HStack(alignment: .titleLine, spacing: 8) {
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 4) {
                         if isUnread { Circle().fill(.red).frame(width: 7, height: 7) }
                         Text(verbatim: "#" + String(pr.number)).font(.caption).foregroundStyle(.secondary)
                     }
                     Text(pr.title).font(.body.weight(isUnread ? .semibold : .regular)).lineLimit(2)
+                        .alignmentGuide(.titleLine) { d in d[.firstTextBaseline] - 5 }
                 }
                 Spacer(minLength: 4)
                 HStack(spacing: 8) {
