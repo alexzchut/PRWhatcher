@@ -13,6 +13,7 @@ public final class Store: ObservableObject {
         }
     }
     @Published public private(set) var pullRequests: [PullRequest] = []
+    @Published public private(set) var assigned: [PullRequest] = []
     @Published public private(set) var state = TrackerState()
     @Published public private(set) var status = ""
     @Published public private(set) var lastChecked: Date?
@@ -89,6 +90,7 @@ public final class Store: ObservableObject {
         guard !repos.isEmpty else {
             status = "Add a repository in Settings"
             pullRequests = []
+            assigned = []
             return
         }
         isRefreshing = true
@@ -97,6 +99,7 @@ public final class Store: ObservableObject {
             let result = try await fetcher.fetch(repos: repos)
             let fresh = state.apply(result.pullRequests, viewer: result.viewer)
             pullRequests = result.pullRequests
+            assigned = result.assigned
             lastChecked = Date()
             status = ""
             persist()

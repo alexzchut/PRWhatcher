@@ -10,23 +10,24 @@ enum Col {
 struct ContentView: View {
     @ObservedObject var store: Store
     @Environment(\.openSettings) private var openSettings
-    @AppStorage("showAllOpen") private var showAll = false
+    @AppStorage("selectedTab") private var tab = Tab.all
+    /// PRs that had unread activity when the panel was opened. They keep their red dot while it stays
+    /// open; the activity itself is marked read right away so the menu bar count clears.
+    @State private var highlighted: Set<String> = []
+
+    enum Tab: String { case all, assigned }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Picker("", selection: $showAll) {
-                Text("Unread (\(unreadPRs.count))").tag(false)
-                Text("All open (\(store.pullRequests.count))").tag(true)
+            Picker("", selection: $tab) {
+                Text("Opened by me (\(store.pullRequests.count))").tag(Tab.all)
+                Text("Assigned to me (\(store.assigned.count))").tag(Tab.assigned)
             }
             .pickerStyle(.segmented)
-            .onChange(of: showAll) { was, now in
-                // Leaving the Unread tab counts as having seen what was listed there.
-                if !was && now { store.markAllRead() }
-            }
             .labelsHidden()
             .padding([.horizontal, .top], 12)
             HStack(alignment: .bottom, spacing: 12) {
-                if showAll { Text("Repo").frame(width: Col.repo, alignment: .leading) }
+                Text("Repo").frame(width: Col.repo, alignment: .leading)
                 HStack(spacing: 8) {
                     Text("PR").frame(maxWidth: .infinity, alignment: .leading)
                     Text("Status").frame(width: Col.status, alignment: .leading)
@@ -42,21 +43,19 @@ struct ContentView: View {
                     if visible.isEmpty {
                         Text(emptyText).foregroundStyle(.secondary)
                     }
-                    if showAll {
-                        ForEach(grouped, id: \.repo) { group in
-                            HStack(alignment: .top, spacing: 12) {
-                                Text(group.repo)
-                                    .font(.caption.weight(.bold))
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: Col.repo, alignment: .topLeading)
-                                VStack(alignment: .leading, spacing: 10) {
-                                    ForEach(group.prs) { pr in PRRow(pr: pr, store: store, showRepo: false) }
+                    ForEach(grouped, id: \.repo) { group in
+                        HStack(alignment: .top, spacing: 12) {
+                            Text(group.repo)
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: Col.repo, alignment: .topLeading)
+                            VStack(alignment: .leading, spacing: 10) {
+                                ForEach(group.prs) { pr in
+                                    PRRow(pr: pr, store: store, isUnread: isUnread(pr))
                                 }
                             }
-                            Divider()
                         }
-                    } else {
-                        ForEach(visible) { pr in PRRow(pr: pr, store: store) }
+                        Divider()
                     }
                 }
                 .padding(12)
@@ -69,7 +68,6 @@ struct ContentView: View {
                 else if let t = store.lastChecked { Text("Checked \(t, style: .relative) ago").foregroundStyle(.secondary) }
                 Spacer()
                 Button("Refresh") { Task { await store.refresh() } }
-                Button("Mark all read") { store.markAllRead() }.disabled(store.unreadCount == 0)
                 Button("Settings") {
                     NSApp.activate(ignoringOtherApps: true)
                     openSettings()
@@ -80,27 +78,38 @@ struct ContentView: View {
             .padding(8)
         }
         .frame(width: 882)
+        .onAppear(perform: panelOpened)
+        .onDisappear { highlighted = [] }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in panelOpened() }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in highlighted = [] }
     }
 
-    private var unreadPRs: [PullRequest] {
-        store.pullRequests.filter { !store.state.unread(for: $0.key).isEmpty }
+    private func panelOpened() {
+        guard !store.state.unread.isEmpty else { return }
+        highlighted.formUnion(store.state.unread.map(\.prKey))
+        store.markAllRead()
     }
 
-    private var visible: [PullRequest] { showAll ? sorted : sorted.filter { !store.state.unread(for: $0.key).isEmpty } }
+    private func isUnread(_ pr: PullRequest) -> Bool {
+        highlighted.contains(pr.key) || !store.state.unread(for: pr.key).isEmpty
+    }
+
+    private var visible: [PullRequest] {
+        switch tab {
+        case .all: return store.pullRequests.sorted { $0.key < $1.key }
+        case .assigned: return store.assigned.sorted { $0.key < $1.key }
+        }
+    }
 
     private var grouped: [(repo: String, prs: [PullRequest])] {
-        Dictionary(grouping: sorted, by: \.repo).map { ($0.key, $0.value) }.sorted { $0.repo < $1.repo }
+        Dictionary(grouping: visible, by: \.repo).map { ($0.key, $0.value) }.sorted { $0.repo < $1.repo }
     }
 
     private var emptyText: String {
         if !store.status.isEmpty && store.pullRequests.isEmpty { return store.status }
-        return showAll ? "No open PRs of yours in the watched repos" : "Nothing new — all caught up"
-    }
-
-    private var sorted: [PullRequest] {
-        store.pullRequests.sorted {
-            let a = store.state.unread(for: $0.key).count, b = store.state.unread(for: $1.key).count
-            return a != b ? a > b : $0.key < $1.key
+        switch tab {
+        case .all: return "No open PRs of yours in the watched repos"
+        case .assigned: return "No open PRs assigned to you in the watched repos"
         }
     }
 }
@@ -108,34 +117,32 @@ struct ContentView: View {
 struct PRRow: View {
     let pr: PullRequest
     @ObservedObject var store: Store
-    var showRepo = true
+    let isUnread: Bool
 
     var body: some View {
-        let unread = store.state.unread(for: pr.key)
-        VStack(alignment: .leading, spacing: 4) {
-            Button {
-                store.markRead(pr)
-                NSWorkspace.shared.open(pr.url)
-            } label: {
-                HStack(alignment: .top, spacing: 8) {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text((showRepo ? "\(pr.repo) #\(pr.number)" : "#\(pr.number)")
-                            + (unread.isEmpty ? "" : " · \(unread.count) new"))
-                            .font(.caption).foregroundStyle(.secondary)
-                        Text(pr.title).font(.body.weight(unread.isEmpty ? .regular : .semibold)).lineLimit(2)
+        Button {
+            store.markRead(pr)
+            NSWorkspace.shared.open(pr.url)
+        } label: {
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 4) {
+                        if isUnread { Circle().fill(.red).frame(width: 7, height: 7) }
+                        Text("#\(pr.number)").font(.caption).foregroundStyle(.secondary)
                     }
-                    Spacer(minLength: 4)
-                    HStack(spacing: 8) {
-                        StatusBadge(status: pr.status)
-                        OthersCell(review: pr.review)
-                    }
-                    .frame(width: Col.status, alignment: .leading)
-                    CopilotCell(review: pr.review)
-                        .frame(width: Col.copilot, alignment: .leading)
+                    Text(pr.title).font(.body.weight(isUnread ? .semibold : .regular)).lineLimit(2)
                 }
+                Spacer(minLength: 4)
+                HStack(spacing: 8) {
+                    StatusBadge(status: pr.status)
+                    OthersCell(review: pr.review)
+                }
+                .frame(width: Col.status, alignment: .leading)
+                CopilotCell(review: pr.review)
+                    .frame(width: Col.copilot, alignment: .leading)
             }
-            .buttonStyle(.plain)
         }
+        .buttonStyle(.plain)
     }
 }
 

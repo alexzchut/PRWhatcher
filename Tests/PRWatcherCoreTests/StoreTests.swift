@@ -112,6 +112,18 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(s.unreadCount, 2)
     }
 
+    func testAssignedListIsStoredWithoutAlerts() async {
+        let f = FakeFetcher(), n = FakeNotifier()
+        let s = make(f, n)
+        _ = s.addRepo("o/r")
+        f.results = [.success(FetchResult(viewer: "me", pullRequests: [],
+                                          assigned: [pr(5, events: [event("a", pr: "o/r#5")])]))]
+        await s.refresh()
+        XCTAssertEqual(s.assigned.map(\.key), ["o/r#5"])
+        XCTAssertTrue(n.sent.isEmpty)
+        XCTAssertEqual(s.unreadCount, 0)
+    }
+
     func testMarkReadAndPersistenceAcrossLaunches() async {
         let f = FakeFetcher(), n = FakeNotifier()
         let s = make(f, n)

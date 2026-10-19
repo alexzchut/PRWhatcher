@@ -34,27 +34,25 @@ public final class GitHubClient: PRFetching {
     }
 
     static let query = """
-    query($q: String!) {
+    query($q: String!, $a: String!) {
       viewer { login }
-      search(query: $q, type: ISSUE, first: 50) {
-        nodes {
-          ... on PullRequest {
-            number title url reviewDecision
-            repository { nameWithOwner }
-            comments(last: 30) { nodes { id url bodyText createdAt author { login } } }
-            reviews(last: 30) { nodes { id url state bodyText createdAt author { login } } }
-            reviewThreads(last: 50) { nodes {
-              isResolved
-              root: comments(first: 1) { nodes { id author { login } } }
-              comments(last: 10) { nodes { id url bodyText createdAt author { login } } }
-            } }
-            commits(last: 30) { nodes { commit {
-              oid url messageHeadline committedDate
-              author { name user { login } }
-            } } }
-          }
-        }
-      }
+      search(query: $q, type: ISSUE, first: 50) { nodes { ...PRFields } }
+      assigned: search(query: $a, type: ISSUE, first: 50) { nodes { ...PRFields } }
+    }
+    fragment PRFields on PullRequest {
+          number title url reviewDecision
+          repository { nameWithOwner }
+          comments(last: 30) { nodes { id url bodyText createdAt author { login } } }
+          reviews(last: 30) { nodes { id url state bodyText createdAt author { login } } }
+          reviewThreads(last: 50) { nodes {
+            isResolved
+            root: comments(first: 1) { nodes { id author { login } } }
+            comments(last: 10) { nodes { id url bodyText createdAt author { login } } }
+          } }
+          commits(last: 30) { nodes { commit {
+            oid url messageHeadline committedDate
+            author { name user { login } }
+          } } }
     }
     """
 
@@ -65,28 +63,31 @@ public final class GitHubClient: PRFetching {
 
     public func fetch(repos: [String]) async throws -> FetchResult {
         for r in repos where !Self.validate(repo: r) { throw GitHubError.badRepo(r) }
-        let q = "is:pr is:open draft:false author:@me " + repos.map { "repo:\($0)" }.joined(separator: " ")
+        let scope = repos.map { "repo:\($0)" }.joined(separator: " ")
+        let q = "is:pr is:open draft:false author:@me " + scope
+        let a = "is:pr is:open draft:false assignee:@me -author:@me " + scope
         do {
-            return try await request(q)
+            return try await request(q, a)
         } catch GitHubError.http(401) {
             token = nil          // token may have been rotated; retry once
-            return try await request(q)
+            return try await request(q, a)
         }
     }
 
     /// Cheap call used by Settings → "Test token".
     public func viewerLogin() async throws -> String {
-        try await request("is:pr is:open author:@me repo:github/gitignore").viewer
+        try await request("is:pr is:open author:@me repo:github/gitignore",
+                          "is:pr is:open assignee:@me repo:github/gitignore").viewer
     }
 
-    private func request(_ q: String) async throws -> FetchResult {
+    private func request(_ q: String, _ a: String) async throws -> FetchResult {
         let token = try await currentToken()
         var req = URLRequest(url: URL(string: "https://api.github.com/graphql")!)
         req.httpMethod = "POST"
         req.setValue("bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("PRWatcher", forHTTPHeaderField: "User-Agent")
         req.httpBody = try JSONSerialization.data(withJSONObject: [
-            "query": Self.query, "variables": ["q": q],
+            "query": Self.query, "variables": ["q": q, "a": a],
         ])
         let (data, resp) = try await session.data(for: req)
         if let http = resp as? HTTPURLResponse, http.statusCode != 200 {
@@ -132,8 +133,10 @@ public final class GitHubClient: PRFetching {
         if let first = resp.errors?.first { throw GitHubError.api(first.message) }
         guard let body = resp.data else { throw GitHubError.api("empty response") }
 
-        let prs = body.search.nodes.compactMap { $0?.toPullRequest(viewer: body.viewer.login ?? "") }
-        return FetchResult(viewer: body.viewer.login ?? "", pullRequests: prs)
+        let viewer = body.viewer.login ?? ""
+        let prs = body.search.nodes.compactMap { $0?.toPullRequest(viewer: viewer) }
+        let assigned = (body.assigned?.nodes ?? []).compactMap { $0?.toPullRequest(viewer: viewer) }
+        return FetchResult(viewer: viewer, pullRequests: prs, assigned: assigned)
     }
 
     private struct Response: Decodable {
@@ -144,6 +147,7 @@ public final class GitHubClient: PRFetching {
     private struct Body: Decodable {
         let viewer: Login
         let search: Search
+        let assigned: Search?
     }
     private struct Login: Decodable { let login: String? }
     private struct Search: Decodable { let nodes: [PRNode?] }

@@ -42,6 +42,7 @@ final class ClientTests: XCTestCase {
         XCTAssertEqual(seen?.url?.absoluteString, "https://api.github.com/graphql")
         let text = String(decoding: body ?? Data(), as: UTF8.self).replacingOccurrences(of: "\\/", with: "/")
         XCTAssertTrue(text.contains("is:pr is:open draft:false author:@me repo:o/r repo:o/s"))
+        XCTAssertTrue(text.contains("is:pr is:open draft:false assignee:@me -author:@me repo:o/r repo:o/s"))
     }
 
     func testRetriesOnceOn401WithFreshToken() async throws {

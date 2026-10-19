@@ -71,6 +71,20 @@ final class ParsingTests: XCTestCase {
         XCTAssertEqual(try GitHubClient.parse(sampleJSON).pullRequests[0].status, .open)
     }
 
+    func testParsesAssignedList() throws {
+        let json = """
+        {"data":{"viewer":{"login":"me"},
+        "search":{"nodes":[]},
+        "assigned":{"nodes":[{"number":9,"title":"Assigned one","url":"https://x/9","reviewDecision":"CHANGES_REQUESTED",
+          "repository":{"nameWithOwner":"o/other"}}, {}]}}}
+        """.data(using: .utf8)!
+        let r = try GitHubClient.parse(json)
+        XCTAssertTrue(r.pullRequests.isEmpty)
+        XCTAssertEqual(r.assigned.map(\.key), ["o/other#9"])
+        XCTAssertEqual(r.assigned[0].status, .changesRequested)
+        XCTAssertTrue(try GitHubClient.parse(sampleJSON).assigned.isEmpty)   // field absent -> empty
+    }
+
     func testRepoValidation() {
         XCTAssertTrue(GitHubClient.validate(repo: "owner/name"))
         for bad in ["", "owner", "owner/", "/name", "a/b/c", "a b/c"] {
