@@ -128,7 +128,7 @@ struct PRRow: View {
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 4) {
                         if isUnread { Circle().fill(.red).frame(width: 7, height: 7) }
-                        Text("#\(pr.number)").font(.caption).foregroundStyle(.secondary)
+                        Text(verbatim: "#" + String(pr.number)).font(.caption).foregroundStyle(.secondary)
                     }
                     Text(pr.title).font(.body.weight(isUnread ? .semibold : .regular)).lineLimit(2)
                 }
