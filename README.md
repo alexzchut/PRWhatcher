@@ -12,6 +12,7 @@ A macOS menu bar app that watches the open pull requests **you authored** on a c
   - **Review**: the verdict dot from the latest GitHub Copilot review (🟢 approval recommended, 🟡 changes recommended, 🔵 needs a closer look) and its unresolved-thread count. Hover the dot to read the review text.
 - PRs with new activity get a red dot and bold title. Opening the panel clears the menu bar count; the dots disappear the next time you open it.
 - The first time a PR is seen, existing activity is recorded silently so you don't get a flood of alerts.
+- Settings open inside the panel (no separate window), with a Back button.
 - Optional launch at login.
 
 ## Requirements
@@ -31,7 +32,7 @@ Notifications only work from the built `.app`, not from `swift run`. macOS asks 
 
 ## Usage
 
-1. Click the menu bar icon, then **Settings**.
+1. Click the menu bar icon, then **Settings**. Settings opens inside the same panel; use **‹ Back** (or Esc) to return to the list.
 2. Paste a repo as `owner/name` or a GitHub URL (for example `https://github.com/owner/repo`) and click **Add**.
 3. Set the check interval. **Test GitHub token** confirms the `gh` login works.
 
@@ -56,4 +57,5 @@ State is stored in `~/Library/Application Support/PRWatcher/state.json`; setting
 ## Notes
 
 - Copilot's own review summary and comments are not listed as activity; they appear only in the Review column.
+- The app is only ad-hoc signed (`build.sh`), so on another Mac build it locally with `./build.sh` or right-click → Open the first time.
 - Only the latest 30 comments/reviews/commits and 50 comment threads per PR are read.
