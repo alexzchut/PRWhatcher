@@ -26,7 +26,5 @@ struct PRWatcherApp: App {
             }
         }
         .menuBarExtraStyle(.window)
-
-        Settings { SettingsView(store: store) }
     }
 }

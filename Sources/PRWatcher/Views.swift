@@ -17,15 +17,30 @@ enum Col {
 
 struct ContentView: View {
     @ObservedObject var store: Store
-    @Environment(\.openSettings) private var openSettings
     @AppStorage("selectedTab") private var tab = Tab.all
     /// PRs that had unread activity when the panel was opened. They keep their red dot while it stays
     /// open; the activity itself is marked read right away so the menu bar count clears.
     @State private var highlighted: Set<String> = []
+    @State private var showSettings = false
 
     enum Tab: String { case all, assigned }
 
     var body: some View {
+        Group {
+            if showSettings {
+                SettingsView(store: store) { showSettings = false }
+            } else {
+                list
+            }
+        }
+        .frame(width: 882)
+        .onAppear(perform: panelOpened)
+        .onDisappear { highlighted = []; showSettings = false }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in panelOpened() }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in highlighted = [] }
+    }
+
+    private var list: some View {
         VStack(alignment: .leading, spacing: 0) {
             Picker("", selection: $tab) {
                 Text("Opened by me (\(store.pullRequests.count))").tag(Tab.all)
@@ -76,20 +91,12 @@ struct ContentView: View {
                 else if let t = store.lastChecked { Text("Checked \(t, style: .relative) ago").foregroundStyle(.secondary) }
                 Spacer()
                 Button("Refresh") { Task { await store.refresh() } }
-                Button("Settings") {
-                    NSApp.activate(ignoringOtherApps: true)
-                    openSettings()
-                }
+                Button("Settings") { showSettings = true }
                 Button("Quit") { NSApp.terminate(nil) }
             }
             .font(.caption)
             .padding(8)
         }
-        .frame(width: 882)
-        .onAppear(perform: panelOpened)
-        .onDisappear { highlighted = [] }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in panelOpened() }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in highlighted = [] }
     }
 
     private func panelOpened() {

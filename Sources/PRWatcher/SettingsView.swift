@@ -5,11 +5,28 @@ import PRWatcherCore
 
 struct SettingsView: View {
     @ObservedObject var store: Store
+    let onClose: () -> Void
     @State private var newRepo = ""
     @State private var message = ""
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Button(action: onClose) { Label("Back", systemImage: "chevron.left") }
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                Text("Settings").font(.headline)
+                Spacer()
+                Color.clear.frame(width: 60, height: 1)   // balances the Back button so the title stays centred
+            }
+            .padding(12)
+            Divider()
+            form
+        }
+    }
+
+    private var form: some View {
         Form {
             Section("Repositories (owner/name)") {
                 List {
@@ -49,29 +66,11 @@ struct SettingsView: View {
             if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.secondary) }
         }
         .formStyle(.grouped)
-        .frame(width: 546)
-        .padding()
-        .background(WindowFocuser())
-        .onDisappear { NSApp.setActivationPolicy(.accessory) }
+        .padding(.horizontal, 12)
     }
 
     private func add() {
         if store.addRepo(newRepo) { newRepo = ""; message = ""; Task { await store.refresh() } }
         else { message = "Invalid or duplicate repo" }
     }
-}
-
-/// Menu bar (accessory) apps can't take keyboard focus, so text fields in Settings stay
-/// read-only. Switch to a regular app while the window is open and force it key.
-private struct WindowFocuser: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let v = NSView()
-        DispatchQueue.main.async {
-            NSApp.setActivationPolicy(.regular)
-            NSApp.activate(ignoringOtherApps: true)
-            v.window?.makeKeyAndOrderFront(nil)
-        }
-        return v
-    }
-    func updateNSView(_ nsView: NSView, context: Context) {}
 }
