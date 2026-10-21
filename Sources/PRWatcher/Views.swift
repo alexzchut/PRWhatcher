@@ -23,7 +23,10 @@ struct ContentView: View {
     @State private var highlighted: Set<String> = []
     @State private var showSettings = false
 
-    enum Tab: String { case all, assigned }
+    @State private var newPR = ""
+    @State private var addMessage = ""
+
+    enum Tab: String { case all, assigned, custom }
 
     var body: some View {
         Group {
@@ -45,16 +48,20 @@ struct ContentView: View {
             Picker("", selection: $tab) {
                 Text("Opened by me (\(store.pullRequests.count))").tag(Tab.all)
                 Text("Assigned to me (\(store.assigned.count))").tag(Tab.assigned)
+                Text("Custom (\(store.customRefs.count))").tag(Tab.custom)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
             .padding([.horizontal, .top], 12)
+            if tab == .custom { addBar }
             HStack(alignment: .bottom, spacing: 12) {
                 Text("Repo").frame(width: Col.repo, alignment: .leading)
                 HStack(spacing: 8) {
                     Text("PR").frame(maxWidth: .infinity, alignment: .leading)
                     Text("Status").frame(width: Col.status, alignment: .leading)
                     Text("Review").frame(width: Col.copilot, alignment: .leading)
+                    // Spans the row's trash column: 50 pt button + 6 pt gap, minus this stack's 8 pt spacing.
+                    if tab == .custom { Text("Actions").frame(width: 48, alignment: .center) }
                 }
             }
             .font(.caption.weight(.semibold))
@@ -66,6 +73,21 @@ struct ContentView: View {
                     if visible.isEmpty {
                         Text(emptyText).foregroundStyle(.secondary)
                     }
+                    if tab == .custom {
+                        ForEach(store.customRefs.filter { ref in !store.custom.contains { $0.key == ref.key } }) { ref in
+                            HStack {
+                                Text(ref.key).font(.caption).foregroundStyle(.secondary)
+                                if store.checkedCustom.contains(ref.key) {
+                                    Text("not found or no access").font(.caption).foregroundStyle(.red)
+                                } else {
+                                    Text("loading…").font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Button { store.removeCustomPR(ref) } label: { Image(systemName: "trash") }
+                                    .buttonStyle(.borderless).help("Remove")
+                            }
+                        }
+                    }
                     ForEach(grouped, id: \.repo) { group in
                         HStack(alignment: .top, spacing: 12) {
                             Text(group.repo)
@@ -74,7 +96,8 @@ struct ContentView: View {
                                 .frame(width: Col.repo, alignment: .topLeading)
                             VStack(alignment: .leading, spacing: 10) {
                                 ForEach(group.prs) { pr in
-                                    PRRow(pr: pr, store: store, isUnread: isUnread(pr))
+                                    PRRow(pr: pr, store: store, isUnread: isUnread(pr),
+                                          onRemove: tab == .custom ? { remove(pr.key) } : nil)
                                 }
                             }
                         }
@@ -113,7 +136,36 @@ struct ContentView: View {
         switch tab {
         case .all: return store.pullRequests.sorted { $0.key < $1.key }
         case .assigned: return store.assigned.sorted { $0.key < $1.key }
+        case .custom: return store.custom.sorted { $0.key < $1.key }
         }
+    }
+
+    private var addBar: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                TextField("", text: $newPR, prompt: Text("PR URL, e.g. https://github.com/owner/repo/pull/123"))
+                    .labelsHidden()
+                    .onSubmit(addPR)
+                Button(action: addPR) { Image(systemName: "plus") }
+                    .help("Add pull request")
+            }
+            if !addMessage.isEmpty { Text(addMessage).font(.caption).foregroundStyle(.red) }
+        }
+        .padding([.horizontal, .top], 12)
+    }
+
+    private func addPR() {
+        if store.addCustomPR(newPR) {
+            newPR = ""
+            addMessage = ""
+            Task { await store.refresh() }
+        } else {
+            addMessage = "Enter a valid PR link that isn't already added"
+        }
+    }
+
+    private func remove(_ key: String) {
+        if let ref = store.customRefs.first(where: { $0.key == key }) { store.removeCustomPR(ref) }
     }
 
     private var grouped: [(repo: String, prs: [PullRequest])] {
@@ -125,6 +177,7 @@ struct ContentView: View {
         switch tab {
         case .all: return "No open PRs of yours in the watched repos"
         case .assigned: return "No open PRs assigned to you in the watched repos"
+        case .custom: return store.customRefs.isEmpty ? "No custom PRs yet — paste a PR link above and press +" : ""
         }
     }
 }
@@ -133,8 +186,22 @@ struct PRRow: View {
     let pr: PullRequest
     @ObservedObject var store: Store
     let isUnread: Bool
+    var onRemove: (() -> Void)? = nil
 
     var body: some View {
+        HStack(alignment: .titleLine, spacing: 6) {
+            main
+            if let onRemove {
+                Button(action: onRemove) { Image(systemName: "trash") }
+                    .buttonStyle(.borderless)
+                    .frame(width: 50)
+                    .help("Remove from custom list")
+                    .alignmentGuide(.titleLine) { d in d[VerticalAlignment.center] }
+            }
+        }
+    }
+
+    private var main: some View {
         Button {
             store.markRead(pr)
             NSWorkspace.shared.open(pr.url)
@@ -154,8 +221,10 @@ struct PRRow: View {
                     OthersCell(review: pr.review)
                 }
                 .frame(width: Col.status, alignment: .leading)
-                CopilotCell(review: pr.review)
-                    .frame(width: Col.copilot, alignment: .leading)
+                // An empty cell (no Copilot review) would collapse and shift Status; keep the column width fixed.
+                Color.clear
+                    .frame(width: Col.copilot, height: 1)
+                    .overlay(alignment: .leading) { CopilotCell(review: pr.review) }
             }
         }
         .buttonStyle(.plain)
@@ -180,6 +249,9 @@ struct StatusBadge: View {
         case .open: return .blue
         case .approved: return .green
         case .changesRequested: return .orange
+        case .draft: return .gray
+        case .merged: return .purple
+        case .closed: return .red
         }
     }
 }

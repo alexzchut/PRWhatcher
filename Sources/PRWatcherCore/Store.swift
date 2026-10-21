@@ -14,12 +14,19 @@ public final class Store: ObservableObject {
     }
     @Published public private(set) var pullRequests: [PullRequest] = []
     @Published public private(set) var assigned: [PullRequest] = []
+    @Published public private(set) var custom: [PullRequest] = []
+    @Published public private(set) var customRefs: [PRRef] {
+        didSet { defaults.set(try? JSONEncoder().encode(customRefs), forKey: Keys.custom) }
+    }
     @Published public private(set) var state = TrackerState()
     @Published public private(set) var status = ""
     @Published public private(set) var lastChecked: Date?
     @Published public private(set) var isRefreshing = false
+    /// Custom PR keys that were part of the last completed fetch; a ref outside this set is still loading.
+    @Published public private(set) var checkedCustom: Set<String> = []
+    private var refreshRequested = false
 
-    private enum Keys { static let repos = "repos", interval = "intervalMinutes" }
+    private enum Keys { static let repos = "repos", interval = "intervalMinutes", custom = "customPRs" }
 
     private let fetcher: PRFetching
     private let notifier: Notifying
@@ -35,6 +42,8 @@ public final class Store: ObservableObject {
         self.defaults = defaults
         self.stateURL = stateURL
         self.repos = defaults.stringArray(forKey: Keys.repos) ?? []
+        self.customRefs = defaults.data(forKey: Keys.custom)
+            .flatMap { try? JSONDecoder().decode([PRRef].self, from: $0) } ?? []
         let saved = defaults.integer(forKey: Keys.interval)
         self.intervalMinutes = saved == 0 ? 5 : min(max(saved, 1), 60)
         if let data = try? Data(contentsOf: stateURL),
@@ -67,6 +76,21 @@ public final class Store: ObservableObject {
         return "\(parts[0])/\(name)"
     }
 
+    /// Adds a PR by URL (or `owner/repo#123`). Returns false for unparseable input and duplicates.
+    @discardableResult
+    public func addCustomPR(_ raw: String) -> Bool {
+        guard let ref = PRRef.parse(raw), !customRefs.contains(ref) else { return false }
+        customRefs.append(ref)
+        return true
+    }
+
+    public func removeCustomPR(_ ref: PRRef) {
+        customRefs.removeAll { $0 == ref }
+        custom.removeAll { $0.key == ref.key }
+        state.forget(prKey: ref.key)
+        persist()
+    }
+
     public func removeRepo(_ r: String) { repos.removeAll { $0 == r } }
 
     public func startPolling() {
@@ -86,24 +110,40 @@ public final class Store: ObservableObject {
     }
 
     public func refresh() async {
-        guard !isRefreshing else { return }
-        guard !repos.isEmpty else {
+        guard !isRefreshing else {
+            refreshRequested = true       // something changed mid-fetch (e.g. a PR was added): run again afterwards
+            return
+        }
+        guard !repos.isEmpty || !customRefs.isEmpty else {
             status = "Add a repository in Settings"
             pullRequests = []
             assigned = []
+            custom = []
             return
         }
         isRefreshing = true
         defer { isRefreshing = false }
+        let refs = customRefs
+        defer {
+            if refreshRequested {
+                refreshRequested = false
+                Task { await refresh() }
+            }
+        }
         do {
-            let result = try await fetcher.fetch(repos: repos)
-            let fresh = state.apply(result.pullRequests, viewer: result.viewer)
+            let result = try await fetcher.fetch(repos: repos, custom: refs)
+            // Hand-added PRs are tracked like the rest, unless they're already in "Opened by me".
+            let mine = Set(result.pullRequests.map(\.key))
+            let tracked = result.pullRequests + result.custom.filter { !mine.contains($0.key) }
+            let fresh = state.apply(tracked, viewer: result.viewer)
             pullRequests = result.pullRequests
             assigned = result.assigned
+            custom = result.custom
+            checkedCustom = Set(refs.map(\.key))
             lastChecked = Date()
             status = ""
             persist()
-            for n in notifications(for: fresh, in: result.pullRequests) {
+            for n in notifications(for: fresh, in: tracked) {
                 notifier.notify(title: n.title, body: n.body, url: n.url)
             }
         } catch {

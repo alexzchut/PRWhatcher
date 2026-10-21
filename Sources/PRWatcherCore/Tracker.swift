@@ -36,6 +36,12 @@ public struct TrackerState: Codable, Equatable {
         return fresh
     }
 
+    /// Drops everything remembered about a PR that is no longer watched.
+    public mutating func forget(prKey: String) {
+        known[prKey] = nil
+        unread.removeAll { $0.prKey == prKey }
+    }
+
     public mutating func markRead(prKey: String) {
         unread.removeAll { $0.prKey == prKey }
     }

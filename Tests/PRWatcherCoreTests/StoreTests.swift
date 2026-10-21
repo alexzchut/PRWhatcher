@@ -5,8 +5,9 @@ final class FakeFetcher: PRFetching {
     var results: [Result<FetchResult, Error>] = []
     var calls = 0
     var lastRepos: [String] = []
-    func fetch(repos: [String]) async throws -> FetchResult {
-        calls += 1; lastRepos = repos
+    var lastCustom: [PRRef] = []
+    func fetch(repos: [String], custom: [PRRef]) async throws -> FetchResult {
+        calls += 1; lastRepos = repos; lastCustom = custom
         return try results.removeFirst().get()
     }
 }
@@ -122,6 +123,104 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(s.assigned.map(\.key), ["o/r#5"])
         XCTAssertTrue(n.sent.isEmpty)
         XCTAssertEqual(s.unreadCount, 0)
+    }
+
+    func testCustomPRsAddRemovePersist() {
+        let f = FakeFetcher(), n = FakeNotifier()
+        let s = make(f, n)
+        XCTAssertTrue(s.addCustomPR("https://github.com/applicaster/zapp/pull/5052"))
+        XCTAssertFalse(s.addCustomPR("applicaster/zapp#5052"))          // duplicate
+        XCTAssertFalse(s.addCustomPR("not a pr"))
+        XCTAssertEqual(s.customRefs.map(\.key), ["applicaster/zapp#5052"])
+        XCTAssertEqual(make(f, n).customRefs.map(\.key), ["applicaster/zapp#5052"])   // persisted
+        s.removeCustomPR(s.customRefs[0])
+        XCTAssertTrue(s.customRefs.isEmpty)
+        XCTAssertTrue(make(f, n).customRefs.isEmpty)
+    }
+
+    func testCustomPRsAreFetchedWithoutWatchedRepos() async {
+        let f = FakeFetcher(), n = FakeNotifier()
+        let s = make(f, n)
+        s.addCustomPR("o/r#7")
+        f.results = [.success(FetchResult(viewer: "me", pullRequests: [], custom: [pr(7, events: [event("a", pr: "o/r#7")])]))]
+        await s.refresh()
+        XCTAssertEqual(f.calls, 1)
+        XCTAssertEqual(f.lastCustom.map(\.key), ["o/r#7"])
+        XCTAssertEqual(s.custom.map(\.key), ["o/r#7"])
+        XCTAssertEqual(s.status, "")
+    }
+
+    func testCustomPRsAlertLikeOthersAndDedupeWithOwn() async {
+        let f = FakeFetcher(), n = FakeNotifier()
+        let s = make(f, n)
+        _ = s.addRepo("o/r")
+        s.addCustomPR("o/r#1")        // also one of mine
+        s.addCustomPR("x/y#2")
+        func result(_ extra: [ActivityEvent]) -> Result<FetchResult, Error> {
+            .success(FetchResult(viewer: "me",
+                                 pullRequests: [pr(1, events: [])],
+                                 custom: [pr(1, events: []), pr(2, repo: "x/y", events: extra)]))
+        }
+        f.results = [result([]), result([event("n", pr: "x/y#2", actor: "bob")])]
+        await s.refresh()
+        XCTAssertTrue(n.sent.isEmpty)                       // baseline
+        await s.refresh()
+        XCTAssertEqual(n.sent.map(\.title), ["x/y #2"])
+        XCTAssertEqual(s.unreadCount, 1)
+    }
+
+    func testRemovingCustomPRForgetsItsState() async {
+        let f = FakeFetcher(), n = FakeNotifier()
+        let s = make(f, n)
+        s.addCustomPR("x/y#2")
+        func result(_ e: [ActivityEvent]) -> Result<FetchResult, Error> {
+            .success(FetchResult(viewer: "me", pullRequests: [], custom: [pr(2, repo: "x/y", events: e)]))
+        }
+        f.results = [result([]), result([event("n", pr: "x/y#2", actor: "bob")])]
+        await s.refresh(); await s.refresh()
+        XCTAssertEqual(s.unreadCount, 1)
+        s.removeCustomPR(s.customRefs[0])
+        XCTAssertEqual(s.unreadCount, 0)
+        XCTAssertTrue(s.custom.isEmpty)
+    }
+
+    func testNewCustomPRIsLoadingUntilFetchedThenCheckedEvenIfMissing() async {
+        let f = FakeFetcher(), n = FakeNotifier()
+        let s = make(f, n)
+        s.addCustomPR("o/r#1")
+        f.results = [.success(FetchResult(viewer: "me", pullRequests: [], custom: [pr(1, events: [])]))]
+        await s.refresh()
+        XCTAssertEqual(s.checkedCustom, ["o/r#1"])
+        s.addCustomPR("o/r#2")
+        XCTAssertFalse(s.checkedCustom.contains("o/r#2"))               // added after the last fetch: still loading
+        f.results = [.success(FetchResult(viewer: "me", pullRequests: [], custom: [pr(1, events: [])]))]   // #2 missing
+        await s.refresh()
+        XCTAssertTrue(s.checkedCustom.contains("o/r#2"))
+        XCTAssertEqual(s.custom.map(\.key), ["o/r#1"])                  // so #2 is genuinely not found
+    }
+
+    func testRefreshRequestedDuringFetchRunsAgain() async throws {
+        final class SlowFetcher: PRFetching {
+            var calls = 0
+            var lastCustom: [PRRef] = []
+            func fetch(repos: [String], custom: [PRRef]) async throws -> FetchResult {
+                calls += 1; lastCustom = custom
+                try await Task.sleep(nanoseconds: 150_000_000)
+                return FetchResult(viewer: "me", pullRequests: [])
+            }
+        }
+        let f = SlowFetcher()
+        let s = Store(fetcher: f, notifier: FakeNotifier(), defaults: UserDefaults(suiteName: suite)!,
+                      stateURL: dir.appendingPathComponent("state.json"))
+        _ = s.addRepo("o/r")
+        let first = Task { await s.refresh() }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        s.addCustomPR("o/r#9")
+        await s.refresh()                 // arrives mid-fetch
+        await first.value
+        try await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertEqual(f.calls, 2)
+        XCTAssertEqual(f.lastCustom.map(\.key), ["o/r#9"])
     }
 
     func testMarkReadAndPersistenceAcrossLaunches() async {

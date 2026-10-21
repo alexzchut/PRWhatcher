@@ -26,20 +26,26 @@ public struct ActivityEvent: Codable, Hashable, Identifiable {
 }
 
 public enum PRStatus: String, Codable {
-    case open, approved, changesRequested
+    case open, approved, changesRequested, draft, merged, closed
 
     public var label: String {
         switch self {
+        case .draft: return "Draft"
+        case .merged: return "Merged"
+        case .closed: return "Closed"
         case .open: return "Open"
         case .approved: return "Approved"
         case .changesRequested: return "Changes requested"
         }
     }
 
-    public init(reviewDecision: String?) {
-        switch reviewDecision {
-        case "APPROVED": self = .approved
-        case "CHANGES_REQUESTED": self = .changesRequested
+    public init(reviewDecision: String?, state: String? = nil, isDraft: Bool = false) {
+        switch (state, reviewDecision) {
+        case ("MERGED", _): self = .merged
+        case ("CLOSED", _): self = .closed
+        case (_, _) where isDraft: self = .draft
+        case (_, "APPROVED"): self = .approved
+        case (_, "CHANGES_REQUESTED"): self = .changesRequested
         default: self = .open
         }
     }
@@ -116,10 +122,12 @@ public struct FetchResult {
     public let viewer: String
     public let pullRequests: [PullRequest]
     public let assigned: [PullRequest]        // open PRs assigned to the viewer (authored by others)
+    public let custom: [PullRequest]          // PRs added by hand; refs that can't be read are omitted
 
-    public init(viewer: String, pullRequests: [PullRequest], assigned: [PullRequest] = []) {
+    public init(viewer: String, pullRequests: [PullRequest], assigned: [PullRequest] = [], custom: [PullRequest] = []) {
         self.viewer = viewer
         self.pullRequests = pullRequests
         self.assigned = assigned
+        self.custom = custom
     }
 }

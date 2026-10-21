@@ -19,7 +19,11 @@ public enum GitHubError: LocalizedError {
 }
 
 public protocol PRFetching {
-    func fetch(repos: [String]) async throws -> FetchResult
+    func fetch(repos: [String], custom: [PRRef]) async throws -> FetchResult
+}
+
+public extension PRFetching {
+    func fetch(repos: [String]) async throws -> FetchResult { try await fetch(repos: repos, custom: []) }
 }
 
 public final class GitHubClient: PRFetching {
@@ -33,14 +37,9 @@ public final class GitHubClient: PRFetching {
         self.tokenProvider = tokenProvider
     }
 
-    static let query = """
-    query($q: String!, $a: String!) {
-      viewer { login }
-      search(query: $q, type: ISSUE, first: 50) { nodes { ...PRFields } }
-      assigned: search(query: $a, type: ISSUE, first: 50) { nodes { ...PRFields } }
-    }
+    static let fragment = """
     fragment PRFields on PullRequest {
-          number title url reviewDecision
+          number title url reviewDecision state isDraft
           repository { nameWithOwner }
           comments(last: 30) { nodes { id url bodyText createdAt author { login } } }
           reviews(last: 30) { nodes { id url state bodyText createdAt author { login } } }
@@ -56,44 +55,65 @@ public final class GitHubClient: PRFetching {
     }
     """
 
+    /// `search` is omitted when no repos are watched; each custom PR becomes a `c<i>` alias.
+    static func buildQuery(includeSearch: Bool, custom: [PRRef]) -> String {
+        var q = includeSearch ? "query($q: String!, $a: String!) {\n" : "query {\n"
+        q += "  viewer { login }\n"
+        if includeSearch {
+            q += "  search(query: $q, type: ISSUE, first: 50) { nodes { ...PRFields } }\n"
+            q += "  assigned: search(query: $a, type: ISSUE, first: 50) { nodes { ...PRFields } }\n"
+        }
+        for (i, r) in custom.enumerated() {
+            q += "  c\(i): repository(owner: \"\(r.owner)\", name: \"\(r.name)\") { pullRequest(number: \(r.number)) { ...PRFields } }\n"
+        }
+        return q + "}\n" + fragment
+    }
+
     public static func validate(repo: String) -> Bool {
         let parts = repo.split(separator: "/", omittingEmptySubsequences: false)
         return parts.count == 2 && parts.allSatisfy { !$0.isEmpty && !$0.contains(" ") }
     }
 
-    public func fetch(repos: [String]) async throws -> FetchResult {
+    public func fetch(repos: [String], custom: [PRRef] = []) async throws -> FetchResult {
         for r in repos where !Self.validate(repo: r) { throw GitHubError.badRepo(r) }
-        let scope = repos.map { "repo:\($0)" }.joined(separator: " ")
-        let q = "is:pr is:open draft:false author:@me " + scope
-        let a = "is:pr is:open draft:false assignee:@me -author:@me " + scope
         do {
-            return try await request(q, a)
+            return try await request(repos: repos, custom: custom)
         } catch GitHubError.http(401) {
             token = nil          // token may have been rotated; retry once
-            return try await request(q, a)
+            return try await request(repos: repos, custom: custom)
         }
     }
 
     /// Cheap call used by Settings → "Test token".
     public func viewerLogin() async throws -> String {
-        try await request("is:pr is:open author:@me repo:github/gitignore",
-                          "is:pr is:open assignee:@me repo:github/gitignore").viewer
+        try await request(repos: ["github/gitignore"], custom: []).viewer
     }
 
-    private func request(_ q: String, _ a: String) async throws -> FetchResult {
+    private func request(repos: [String], custom: [PRRef]) async throws -> FetchResult {
+        var variables: [String: String] = [:]
+        if !repos.isEmpty {
+            let scope = repos.map { "repo:\($0)" }.joined(separator: " ")
+            variables["q"] = "is:pr is:open draft:false author:@me " + scope
+            variables["a"] = "is:pr is:open draft:false assignee:@me -author:@me " + scope
+        }
+        let query = Self.buildQuery(includeSearch: !repos.isEmpty, custom: custom)
+        return try await send(query: query, variables: variables, custom: custom)
+    }
+
+    private func send(query: String, variables: [String: String], custom: [PRRef]) async throws -> FetchResult {
         let token = try await currentToken()
         var req = URLRequest(url: URL(string: "https://api.github.com/graphql")!)
         req.httpMethod = "POST"
         req.setValue("bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("PRWatcher", forHTTPHeaderField: "User-Agent")
         req.httpBody = try JSONSerialization.data(withJSONObject: [
-            "query": Self.query, "variables": ["q": q, "a": a],
+            "query": query, "variables": variables,
         ])
         let (data, resp) = try await session.data(for: req)
         if let http = resp as? HTTPURLResponse, http.statusCode != 200 {
             throw GitHubError.http(http.statusCode)
         }
-        return try Self.parse(data)
+        return try Self.parse(data, custom: custom)
     }
 
     private func currentToken() async throws -> String {
@@ -128,26 +148,51 @@ public final class GitHubClient: PRFetching {
 
     // MARK: - Parsing
 
-    public static func parse(_ data: Data) throws -> FetchResult {
+    public static func parse(_ data: Data, custom: [PRRef] = []) throws -> FetchResult {
         let resp = try JSONDecoder().decode(Response.self, from: data)
-        if let first = resp.errors?.first { throw GitHubError.api(first.message) }
+        // A custom PR that was deleted or isn't visible comes back as NOT_FOUND next to usable data.
+        if let bad = resp.errors?.first(where: { $0.type != "NOT_FOUND" }) { throw GitHubError.api(bad.message) }
         guard let body = resp.data else { throw GitHubError.api("empty response") }
 
         let viewer = body.viewer.login ?? ""
-        let prs = body.search.nodes.compactMap { $0?.toPullRequest(viewer: viewer) }
+        let prs = (body.search?.nodes ?? []).compactMap { $0?.toPullRequest(viewer: viewer) }
         let assigned = (body.assigned?.nodes ?? []).compactMap { $0?.toPullRequest(viewer: viewer) }
-        return FetchResult(viewer: viewer, pullRequests: prs, assigned: assigned)
+        let customPRs = custom.indices.compactMap { body.customs[$0]?.toPullRequest(viewer: viewer) }
+        return FetchResult(viewer: viewer, pullRequests: prs, assigned: assigned, custom: customPRs)
     }
 
     private struct Response: Decodable {
         let data: Body?
         let errors: [Err]?
     }
-    private struct Err: Decodable { let message: String }
+    private struct Err: Decodable { let message: String; let type: String? }
+    private struct DynamicKey: CodingKey {
+        let stringValue: String
+        var intValue: Int? { nil }
+        init(_ s: String) { stringValue = s }
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { return nil }
+    }
+    private struct RepoWrap: Decodable { let pullRequest: PRNode? }
     private struct Body: Decodable {
         let viewer: Login
-        let search: Search
+        let search: Search?
         let assigned: Search?
+        let customs: [Int: PRNode]
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: DynamicKey.self)
+            viewer = try c.decode(Login.self, forKey: DynamicKey("viewer"))
+            search = try c.decodeIfPresent(Search.self, forKey: DynamicKey("search"))
+            assigned = try c.decodeIfPresent(Search.self, forKey: DynamicKey("assigned"))
+            var found: [Int: PRNode] = [:]
+            for key in c.allKeys where key.stringValue.hasPrefix("c") {
+                if let i = Int(key.stringValue.dropFirst()), let node = try c.decodeIfPresent(RepoWrap.self, forKey: key)?.pullRequest {
+                    found[i] = node
+                }
+            }
+            customs = found
+        }
     }
     private struct Login: Decodable { let login: String? }
     private struct Search: Decodable { let nodes: [PRNode?] }
@@ -182,6 +227,8 @@ public final class GitHubClient: PRFetching {
         let title: String?
         let url: String?
         let reviewDecision: String?
+        let state: String?
+        let isDraft: Bool?
         let repository: Repo?
         let comments: Nodes<CommentNode>?
         let reviews: Nodes<CommentNode>?
@@ -240,7 +287,7 @@ public final class GitHubClient: PRFetching {
                     summary: c.messageHeadline ?? "commit"))
             }
             return PullRequest(repo: repo, number: number, title: title, url: prURL, events: events,
-                               status: PRStatus(reviewDecision: reviewDecision),
+                               status: PRStatus(reviewDecision: reviewDecision, state: state, isDraft: isDraft ?? false),
                                review: reviewSummary(viewer: viewer))
         }
 
