@@ -48,7 +48,7 @@ struct ContentView: View {
             Picker("", selection: $tab) {
                 Text("Opened by me (\(store.pullRequests.count))").tag(Tab.all)
                 Text("Assigned to me (\(store.assigned.count))").tag(Tab.assigned)
-                Text("Custom (\(store.customRefs.count))").tag(Tab.custom)
+                Text("Other (\(store.customRefs.count))").tag(Tab.custom)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
@@ -177,7 +177,7 @@ struct ContentView: View {
         switch tab {
         case .all: return "No open PRs of yours in the watched repos"
         case .assigned: return "No open PRs assigned to you in the watched repos"
-        case .custom: return store.customRefs.isEmpty ? "No custom PRs yet — paste a PR link above and press +" : ""
+        case .custom: return store.customRefs.isEmpty ? "No other PRs yet — paste a PR link above and press +" : ""
         }
     }
 }
@@ -195,7 +195,7 @@ struct PRRow: View {
                 Button(action: onRemove) { Image(systemName: "trash") }
                     .buttonStyle(.borderless)
                     .frame(width: 50)
-                    .help("Remove from custom list")
+                    .help("Remove from the Other list")
                     .alignmentGuide(.titleLine) { d in d[VerticalAlignment.center] }
             }
         }
