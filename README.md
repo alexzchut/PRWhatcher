@@ -7,7 +7,7 @@ A macOS menu bar app that watches the open pull requests **you authored** on a c
 - Polls GitHub on an interval you choose (1–60 min, default 5) with a single GraphQL query.
 - Alerts on new **comments** (conversation and inline), **reviews** and **commits** by other people. Your own activity is ignored. Draft PRs are excluded.
 - Menu bar icon with an unread count, plus one native notification per PR per check. Clicking a notification opens the PR (or the exact comment/review/commit when there is only one).
-- Popover with three tabs, grouped by repo: **Opened by me**, **Assigned to me** (open PRs assigned to you by others) and **Other** (any PRs you add by link, see below). Columns:
+- Popover with three tabs, grouped by repo: **Opened by me**, **Assigned to me** (open PRs by others that are assigned to you or waiting for your own review; PRs requested only through a team, and PRs you already reviewed, are not included) and **Other** (any PRs you add by link, see below). Columns:
   - **Status**: Open / Approved / Changes requested (Draft, Merged and Closed also show for PRs on the Other tab), plus the number of unresolved comment threads from other reviewers.
   - **Review**: the verdict dot from the latest GitHub Copilot review (🟢 approval recommended, 🟡 changes recommended, 🔵 needs a closer look) and its unresolved-thread count. Hover the dot to read the review text.
 - PRs with new activity get a red dot and bold title. Opening the panel clears the menu bar count; the dots disappear the next time you open it.

@@ -121,7 +121,7 @@ public struct PullRequest: Codable, Hashable, Identifiable {
 public struct FetchResult {
     public let viewer: String
     public let pullRequests: [PullRequest]
-    public let assigned: [PullRequest]        // open PRs assigned to the viewer (authored by others)
+    public let assigned: [PullRequest]        // open PRs by others assigned to the viewer or awaiting their own review
     public let custom: [PullRequest]          // PRs added by hand; refs that can't be read are omitted
 
     public init(viewer: String, pullRequests: [PullRequest], assigned: [PullRequest] = [], custom: [PullRequest] = []) {

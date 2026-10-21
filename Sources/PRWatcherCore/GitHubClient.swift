@@ -57,11 +57,12 @@ public final class GitHubClient: PRFetching {
 
     /// `search` is omitted when no repos are watched; each custom PR becomes a `c<i>` alias.
     static func buildQuery(includeSearch: Bool, custom: [PRRef]) -> String {
-        var q = includeSearch ? "query($q: String!, $a: String!) {\n" : "query {\n"
+        var q = includeSearch ? "query($q: String!, $a: String!, $r: String!) {\n" : "query {\n"
         q += "  viewer { login }\n"
         if includeSearch {
             q += "  search(query: $q, type: ISSUE, first: 50) { nodes { ...PRFields } }\n"
             q += "  assigned: search(query: $a, type: ISSUE, first: 50) { nodes { ...PRFields } }\n"
+            q += "  reviewing: search(query: $r, type: ISSUE, first: 50) { nodes { ...PRFields } }\n"
         }
         for (i, r) in custom.enumerated() {
             q += "  c\(i): repository(owner: \"\(r.owner)\", name: \"\(r.name)\") { pullRequest(number: \(r.number)) { ...PRFields } }\n"
@@ -95,6 +96,7 @@ public final class GitHubClient: PRFetching {
             let scope = repos.map { "repo:\($0)" }.joined(separator: " ")
             variables["q"] = "is:pr is:open draft:false author:@me " + scope
             variables["a"] = "is:pr is:open draft:false assignee:@me -author:@me " + scope
+            variables["r"] = "is:pr is:open draft:false user-review-requested:@me -author:@me " + scope
         }
         let query = Self.buildQuery(includeSearch: !repos.isEmpty, custom: custom)
         return try await send(query: query, variables: variables, custom: custom)
@@ -156,7 +158,11 @@ public final class GitHubClient: PRFetching {
 
         let viewer = body.viewer.login ?? ""
         let prs = (body.search?.nodes ?? []).compactMap { $0?.toPullRequest(viewer: viewer) }
-        let assigned = (body.assigned?.nodes ?? []).compactMap { $0?.toPullRequest(viewer: viewer) }
+        // "Assigned to me" = assigned to the viewer or personally asked for their review, without duplicates.
+        var seen = Set<String>()
+        let assigned = ((body.assigned?.nodes ?? []) + (body.reviewing?.nodes ?? []))
+            .compactMap { $0?.toPullRequest(viewer: viewer) }
+            .filter { seen.insert($0.key).inserted }
         let customPRs = custom.indices.compactMap { body.customs[$0]?.toPullRequest(viewer: viewer) }
         return FetchResult(viewer: viewer, pullRequests: prs, assigned: assigned, custom: customPRs)
     }
@@ -178,6 +184,7 @@ public final class GitHubClient: PRFetching {
         let viewer: Login
         let search: Search?
         let assigned: Search?
+        let reviewing: Search?
         let customs: [Int: PRNode]
 
         init(from decoder: Decoder) throws {
@@ -185,6 +192,7 @@ public final class GitHubClient: PRFetching {
             viewer = try c.decode(Login.self, forKey: DynamicKey("viewer"))
             search = try c.decodeIfPresent(Search.self, forKey: DynamicKey("search"))
             assigned = try c.decodeIfPresent(Search.self, forKey: DynamicKey("assigned"))
+            reviewing = try c.decodeIfPresent(Search.self, forKey: DynamicKey("reviewing"))
             var found: [Int: PRNode] = [:]
             for key in c.allKeys where key.stringValue.hasPrefix("c") {
                 if let i = Int(key.stringValue.dropFirst()), let node = try c.decodeIfPresent(RepoWrap.self, forKey: key)?.pullRequest {

@@ -27,7 +27,7 @@ final class CustomPRTests: XCTestCase {
     func testBuildQueryAddsAliasesAndOptionalSearch() {
         let refs = [PRRef(owner: "o", name: "r", number: 1), PRRef(owner: "x", name: "y-z", number: 22)]
         let q = GitHubClient.buildQuery(includeSearch: true, custom: refs)
-        XCTAssertTrue(q.hasPrefix("query($q: String!, $a: String!)"))
+        XCTAssertTrue(q.hasPrefix("query($q: String!, $a: String!, $r: String!)"))
         XCTAssertTrue(q.contains(#"c0: repository(owner: "o", name: "r") { pullRequest(number: 1)"#))
         XCTAssertTrue(q.contains(#"c1: repository(owner: "x", name: "y-z") { pullRequest(number: 22)"#))
         let noSearch = GitHubClient.buildQuery(includeSearch: false, custom: refs)

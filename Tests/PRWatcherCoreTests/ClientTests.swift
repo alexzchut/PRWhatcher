@@ -43,6 +43,7 @@ final class ClientTests: XCTestCase {
         let text = String(decoding: body ?? Data(), as: UTF8.self).replacingOccurrences(of: "\\/", with: "/")
         XCTAssertTrue(text.contains("is:pr is:open draft:false author:@me repo:o/r repo:o/s"))
         XCTAssertTrue(text.contains("is:pr is:open draft:false assignee:@me -author:@me repo:o/r repo:o/s"))
+        XCTAssertTrue(text.contains("is:pr is:open draft:false user-review-requested:@me -author:@me repo:o/r repo:o/s"))
     }
 
     func testRetriesOnceOn401WithFreshToken() async throws {
