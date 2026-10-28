@@ -22,7 +22,7 @@ struct PRWatcherApp: App {
         } label: {
             HStack(spacing: 2) {
                 Image(systemName: "arrow.triangle.pull")
-                if store.unreadCount > 0 { Text("\(store.unreadCount)") }
+                if store.menuBadgeCount > 0 { Text("\(store.menuBadgeCount)") }
             }
         }
         .menuBarExtraStyle(.window)

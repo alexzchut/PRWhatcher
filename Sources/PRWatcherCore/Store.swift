@@ -36,6 +36,21 @@ public final class Store: ObservableObject {
 
     public var unreadCount: Int { state.unread.count }
 
+    private var allPullRequests: [PullRequest] {
+        var seen = Set<String>()
+        return (pullRequests + assigned + custom).filter { seen.insert($0.key).inserted }
+    }
+
+    /// Unresolved Copilot threads not yet acknowledged by opening the panel; threads added after that count again.
+    public var copilotOpenCount: Int {
+        allPullRequests.reduce(0) {
+            $0 + max(0, $1.review.copilotUnresolved - (state.copilotAcked[$1.key] ?? 0))
+        }
+    }
+
+    /// Number shown next to the menu bar icon: unread activity plus open Copilot feedback.
+    public var menuBadgeCount: Int { unreadCount + copilotOpenCount }
+
     public init(fetcher: PRFetching, notifier: Notifying, defaults: UserDefaults = .standard, stateURL: URL) {
         self.fetcher = fetcher
         self.notifier = notifier
@@ -158,6 +173,7 @@ public final class Store: ObservableObject {
 
     public func markAllRead() {
         state.markAllRead()
+        for pr in allPullRequests { state.copilotAcked[pr.key] = pr.review.copilotUnresolved }
         persist()
     }
 

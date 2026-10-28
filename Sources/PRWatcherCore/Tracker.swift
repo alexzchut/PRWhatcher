@@ -4,8 +4,16 @@ import Foundation
 public struct TrackerState: Codable, Equatable {
     public var known: [String: Set<String>] = [:]   // prKey -> event ids already seen
     public var unread: [ActivityEvent] = []
+    public var copilotAcked: [String: Int] = [:]    // prKey -> unresolved Copilot threads when the PR was last opened
 
     public init() {}
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        known = try c.decode([String: Set<String>].self, forKey: .known)
+        unread = try c.decode([ActivityEvent].self, forKey: .unread)
+        copilotAcked = try c.decodeIfPresent([String: Int].self, forKey: .copilotAcked) ?? [:]
+    }
 
     /// Merges a fresh fetch into the state and returns the events that are new
     /// (not authored by `viewer`, not seen before). A PR seen for the first time is
@@ -39,6 +47,7 @@ public struct TrackerState: Codable, Equatable {
     /// Drops everything remembered about a PR that is no longer watched.
     public mutating func forget(prKey: String) {
         known[prKey] = nil
+        copilotAcked[prKey] = nil
         unread.removeAll { $0.prKey == prKey }
     }
 

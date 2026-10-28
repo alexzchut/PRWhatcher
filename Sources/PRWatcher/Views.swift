@@ -123,9 +123,8 @@ struct ContentView: View {
     }
 
     private func panelOpened() {
-        guard !store.state.unread.isEmpty else { return }
         highlighted.formUnion(store.state.unread.map(\.prKey))
-        store.markAllRead()
+        store.markAllRead()   // also acknowledges open Copilot threads for the menu bar count
     }
 
     private func isUnread(_ pr: PullRequest) -> Bool {
