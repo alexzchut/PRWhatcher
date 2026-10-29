@@ -25,6 +25,8 @@ public final class Store: ObservableObject {
     /// Custom PR keys that were part of the last completed fetch; a ref outside this set is still loading.
     @Published public private(set) var checkedCustom: Set<String> = []
     private var refreshRequested = false
+    /// Unresolved Copilot threads per PR at the previous fetch; a PR not in here is baselined without alerting.
+    private var lastCopilotCounts: [String: Int] = [:]
 
     private enum Keys { static let repos = "repos", interval = "intervalMinutes", custom = "customPRs" }
 
@@ -161,9 +163,24 @@ public final class Store: ObservableObject {
             for n in notifications(for: fresh, in: tracked) {
                 notifier.notify(title: n.title, body: n.body, url: n.url)
             }
+            notifyNewCopilotThreads(in: tracked)
         } catch {
             status = error.localizedDescription
         }
+    }
+
+    private func notifyNewCopilotThreads(in prs: [PullRequest]) {
+        var counts: [String: Int] = [:]
+        for pr in prs {
+            let now = pr.review.copilotUnresolved
+            counts[pr.key] = now
+            guard let before = lastCopilotCounts[pr.key], now > before else { continue }
+            let added = now - before
+            notifier.notify(title: "\(pr.repo) #\(pr.number)",
+                            body: "Copilot: \(added) new unresolved issue\(added == 1 ? "" : "s")",
+                            url: pr.url)
+        }
+        lastCopilotCounts = counts
     }
 
     public func markRead(_ pr: PullRequest) {

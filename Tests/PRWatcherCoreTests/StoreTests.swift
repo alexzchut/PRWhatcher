@@ -285,4 +285,22 @@ final class StoreTests: XCTestCase {
         await s.refresh()
         XCTAssertEqual(s.menuBadgeCount, 2)                 // two new threads since the panel was opened
     }
+
+    func testNotifiesWhenCopilotAddsThreadsButNotOnBaseline() async {
+        let f = FakeFetcher(), n = FakeNotifier()
+        let s = make(f, n)
+        s.addRepo("o/r")
+        func result(_ open: Int) -> Result<FetchResult, Error> {
+            let p = PullRequest(repo: "o/r", number: 1, title: "T1", url: URL(string: "https://github.com/o/r/pull/1")!,
+                                events: [], review: ReviewSummary(copilotReviewed: true, copilotUnresolved: open))
+            return .success(FetchResult(viewer: "me", pullRequests: [p]))
+        }
+        f.results = [result(11), result(11), result(14), result(12)]
+        await s.refresh(); await s.refresh()
+        XCTAssertTrue(n.sent.isEmpty)                       // baseline, then unchanged
+        await s.refresh()
+        XCTAssertEqual(n.sent.map(\.body), ["Copilot: 3 new unresolved issues"])
+        await s.refresh()
+        XCTAssertEqual(n.sent.count, 1)                     // fewer threads: no alert
+    }
 }
