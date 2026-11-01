@@ -50,6 +50,20 @@ struct SettingsView: View {
                 }
             }
             Section {
+                HStack(spacing: 16) {
+                    Toggle("Open", isOn: .constant(true)).disabled(true)
+                    Toggle("Draft", isOn: $store.statuses.draft)
+                    Toggle("Merged", isOn: $store.statuses.merged)
+                    Toggle("Closed", isOn: $store.statuses.closed)
+                }
+                .toggleStyle(.checkbox)
+            } header: {
+                Text("PR statuses to include")
+            } footer: {
+                Text("Applies to Opened by me and Assigned to me. Merged and closed PRs are limited to the 20 most recently updated per search.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section {
                 Stepper("Check every \(store.intervalMinutes) min", value: $store.intervalMinutes, in: 1...60)
                 Toggle("Launch at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, on in

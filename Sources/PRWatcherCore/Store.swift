@@ -12,6 +12,14 @@ public final class Store: ObservableObject {
             if pollTask != nil { startPolling() }
         }
     }
+    /// PR states the repo searches include (the Other tab always shows every state).
+    @Published public var statuses: StatusFilter {
+        didSet {
+            guard statuses != oldValue else { return }
+            defaults.set(try? JSONEncoder().encode(statuses), forKey: Keys.statuses)
+            Task { await refresh() }
+        }
+    }
     @Published public private(set) var pullRequests: [PullRequest] = []
     @Published public private(set) var assigned: [PullRequest] = []
     @Published public private(set) var custom: [PullRequest] = []
@@ -25,8 +33,10 @@ public final class Store: ObservableObject {
     /// Custom PR keys that were part of the last completed fetch; a ref outside this set is still loading.
     @Published public private(set) var checkedCustom: Set<String> = []
     private var refreshRequested = false
+    /// Unresolved Copilot threads per PR at the previous fetch; a PR not in here is baselined without alerting.
+    private var lastCopilotCounts: [String: Int] = [:]
 
-    private enum Keys { static let repos = "repos", interval = "intervalMinutes", custom = "customPRs" }
+    private enum Keys { static let repos = "repos", interval = "intervalMinutes", custom = "customPRs", statuses = "statuses" }
 
     private let fetcher: PRFetching
     private let notifier: Notifying
@@ -59,6 +69,8 @@ public final class Store: ObservableObject {
         self.repos = defaults.stringArray(forKey: Keys.repos) ?? []
         self.customRefs = defaults.data(forKey: Keys.custom)
             .flatMap { try? JSONDecoder().decode([PRRef].self, from: $0) } ?? []
+        self.statuses = defaults.data(forKey: Keys.statuses)
+            .flatMap { try? JSONDecoder().decode(StatusFilter.self, from: $0) } ?? StatusFilter()
         let saved = defaults.integer(forKey: Keys.interval)
         self.intervalMinutes = saved == 0 ? 5 : min(max(saved, 1), 60)
         if let data = try? Data(contentsOf: stateURL),
@@ -146,7 +158,7 @@ public final class Store: ObservableObject {
             }
         }
         do {
-            let result = try await fetcher.fetch(repos: repos, custom: refs)
+            let result = try await fetcher.fetch(repos: repos, custom: refs, statuses: statuses)
             // Hand-added PRs are tracked like the rest, unless they're already in "Opened by me".
             let mine = Set(result.pullRequests.map(\.key))
             let tracked = result.pullRequests + result.custom.filter { !mine.contains($0.key) }
@@ -161,9 +173,24 @@ public final class Store: ObservableObject {
             for n in notifications(for: fresh, in: tracked) {
                 notifier.notify(title: n.title, body: n.body, url: n.url)
             }
+            notifyNewCopilotThreads(in: tracked)
         } catch {
             status = error.localizedDescription
         }
+    }
+
+    private func notifyNewCopilotThreads(in prs: [PullRequest]) {
+        var counts: [String: Int] = [:]
+        for pr in prs {
+            let now = pr.review.copilotUnresolved
+            counts[pr.key] = now
+            guard let before = lastCopilotCounts[pr.key], now > before else { continue }
+            let added = now - before
+            notifier.notify(title: "\(pr.repo) #\(pr.number)",
+                            body: "Copilot: \(added) new unresolved issue\(added == 1 ? "" : "s")",
+                            url: pr.url)
+        }
+        lastCopilotCounts = counts
     }
 
     public func markRead(_ pr: PullRequest) {

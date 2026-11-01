@@ -6,8 +6,9 @@ final class FakeFetcher: PRFetching {
     var calls = 0
     var lastRepos: [String] = []
     var lastCustom: [PRRef] = []
-    func fetch(repos: [String], custom: [PRRef]) async throws -> FetchResult {
-        calls += 1; lastRepos = repos; lastCustom = custom
+    var lastStatuses = StatusFilter()
+    func fetch(repos: [String], custom: [PRRef], statuses: StatusFilter) async throws -> FetchResult {
+        calls += 1; lastRepos = repos; lastCustom = custom; lastStatuses = statuses
         return try results.removeFirst().get()
     }
 }
@@ -43,6 +44,18 @@ final class StoreTests: XCTestCase {
         let s = make(FakeFetcher(), FakeNotifier())
         XCTAssertEqual(s.intervalMinutes, 5)
         XCTAssertTrue(s.repos.isEmpty)
+    }
+
+    func testStatusFilterDefaultsPersistsAndIsSentToFetcher() async {
+        let f = FakeFetcher()
+        let s = make(f, FakeNotifier())
+        XCTAssertEqual(s.statuses, StatusFilter())
+        _ = s.addRepo("o/r")
+        f.results = [ok([]), ok([])]
+        s.statuses.merged = true              // triggers a refresh on its own
+        await s.refresh()
+        XCTAssertEqual(f.lastStatuses, StatusFilter(merged: true))
+        XCTAssertEqual(make(FakeFetcher(), FakeNotifier()).statuses, StatusFilter(merged: true))
     }
 
     func testRepoManagement() {
@@ -203,7 +216,7 @@ final class StoreTests: XCTestCase {
         final class SlowFetcher: PRFetching {
             var calls = 0
             var lastCustom: [PRRef] = []
-            func fetch(repos: [String], custom: [PRRef]) async throws -> FetchResult {
+            func fetch(repos: [String], custom: [PRRef], statuses: StatusFilter) async throws -> FetchResult {
                 calls += 1; lastCustom = custom
                 try await Task.sleep(nanoseconds: 150_000_000)
                 return FetchResult(viewer: "me", pullRequests: [])
@@ -284,5 +297,23 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(s.menuBadgeCount, 0)
         await s.refresh()
         XCTAssertEqual(s.menuBadgeCount, 2)                 // two new threads since the panel was opened
+    }
+
+    func testNotifiesWhenCopilotAddsThreadsButNotOnBaseline() async {
+        let f = FakeFetcher(), n = FakeNotifier()
+        let s = make(f, n)
+        s.addRepo("o/r")
+        func result(_ open: Int) -> Result<FetchResult, Error> {
+            let p = PullRequest(repo: "o/r", number: 1, title: "T1", url: URL(string: "https://github.com/o/r/pull/1")!,
+                                events: [], review: ReviewSummary(copilotReviewed: true, copilotUnresolved: open))
+            return .success(FetchResult(viewer: "me", pullRequests: [p]))
+        }
+        f.results = [result(11), result(11), result(14), result(12)]
+        await s.refresh(); await s.refresh()
+        XCTAssertTrue(n.sent.isEmpty)                       // baseline, then unchanged
+        await s.refresh()
+        XCTAssertEqual(n.sent.map(\.body), ["Copilot: 3 new unresolved issues"])
+        await s.refresh()
+        XCTAssertEqual(n.sent.count, 1)                     // fewer threads: no alert
     }
 }
