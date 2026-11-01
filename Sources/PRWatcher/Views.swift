@@ -174,8 +174,8 @@ struct ContentView: View {
     private var emptyText: String {
         if !store.status.isEmpty && store.pullRequests.isEmpty { return store.status }
         switch tab {
-        case .all: return "No open PRs of yours in the watched repos"
-        case .assigned: return "No open PRs assigned to you in the watched repos"
+        case .all: return "No PRs of yours in the watched repos"
+        case .assigned: return "No PRs assigned to you in the watched repos"
         case .custom: return store.customRefs.isEmpty ? "No other PRs yet — paste a PR link above and press +" : ""
         }
     }

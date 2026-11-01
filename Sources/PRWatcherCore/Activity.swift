@@ -51,6 +51,32 @@ public enum PRStatus: String, Codable {
     }
 }
 
+/// Which PR states the repo searches return. Open, ready-for-review PRs are always included.
+public struct StatusFilter: Codable, Equatable {
+    public var draft: Bool
+    public var merged: Bool
+    public var closed: Bool
+
+    public init(draft: Bool = false, merged: Bool = false, closed: Bool = false) {
+        self.draft = draft
+        self.merged = merged
+        self.closed = closed
+    }
+
+    /// Search qualifier for open PRs.
+    var openQualifier: String { draft ? "is:open" : "is:open draft:false" }
+
+    /// Search qualifier for finished PRs, or nil when neither merged nor closed is wanted.
+    var finishedQualifier: String? {
+        switch (merged, closed) {
+        case (true, true): return "is:closed"
+        case (true, false): return "is:merged"
+        case (false, true): return "is:closed is:unmerged"
+        case (false, false): return nil
+        }
+    }
+}
+
 /// Verdict Copilot puts at the top of its review ("🟢 Approval recommended", "🟡 Changes recommended",
 /// "🔵 Needs a closer look").
 public enum CopilotVerdict: String, Codable {
@@ -121,7 +147,7 @@ public struct PullRequest: Codable, Hashable, Identifiable {
 public struct FetchResult {
     public let viewer: String
     public let pullRequests: [PullRequest]
-    public let assigned: [PullRequest]        // open PRs by others assigned to the viewer or awaiting their own review
+    public let assigned: [PullRequest]        // PRs by others assigned to the viewer or awaiting their own review
     public let custom: [PullRequest]          // PRs added by hand; refs that can't be read are omitted
 
     public init(viewer: String, pullRequests: [PullRequest], assigned: [PullRequest] = [], custom: [PullRequest] = []) {

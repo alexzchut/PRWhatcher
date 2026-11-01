@@ -46,6 +46,62 @@ final class ClientTests: XCTestCase {
         XCTAssertTrue(text.contains("is:pr is:open draft:false user-review-requested:@me -author:@me repo:o/r repo:o/s"))
     }
 
+    private func capturedBody(_ statuses: StatusFilter) async throws -> String {
+        var body: Data?
+        MockURLProtocol.handler = { req in
+            body = req.httpBodyStream.map { s in
+                s.open(); defer { s.close() }
+                var d = Data(); var buf = [UInt8](repeating: 0, count: 4096)
+                while s.hasBytesAvailable { let n = s.read(&buf, maxLength: 4096); if n <= 0 { break }; d.append(buf, count: n) }
+                return d
+            }
+            return (200, sampleJSON)
+        }
+        let client = GitHubClient(session: session(), tokenProvider: { "tok" })
+        _ = try await client.fetch(repos: ["o/r"], custom: [], statuses: statuses)
+        return String(decoding: body ?? Data(), as: UTF8.self).replacingOccurrences(of: "\\/", with: "/")
+    }
+
+    func testDefaultStatusesSkipFinishedSearches() async throws {
+        let text = try await capturedBody(StatusFilter())
+        XCTAssertFalse(text.contains("searchDone"))
+        XCTAssertFalse(text.contains("is:merged"))
+        XCTAssertFalse(text.contains("is:closed"))
+    }
+
+    func testDraftDropsDraftFilter() async throws {
+        let text = try await capturedBody(StatusFilter(draft: true))
+        XCTAssertTrue(text.contains("is:pr is:open author:@me repo:o/r"))
+        XCTAssertFalse(text.contains("draft:false"))
+    }
+
+    func testMergedAndClosedAddFinishedSearches() async throws {
+        let merged = try await capturedBody(StatusFilter(merged: true))
+        XCTAssertTrue(merged.contains("searchDone: search(query: $qd"))
+        XCTAssertTrue(merged.contains("is:pr is:merged author:@me sort:updated-desc repo:o/r"))
+        XCTAssertTrue(merged.contains("is:pr is:open draft:false author:@me repo:o/r"))
+        let closed = try await capturedBody(StatusFilter(closed: true))
+        XCTAssertTrue(closed.contains("is:pr is:closed is:unmerged assignee:@me -author:@me sort:updated-desc repo:o/r"))
+        let both = try await capturedBody(StatusFilter(merged: true, closed: true))
+        XCTAssertTrue(both.contains("is:pr is:closed user-review-requested:@me -author:@me sort:updated-desc repo:o/r"))
+        XCTAssertFalse(both.contains("is:unmerged"))
+    }
+
+    func testParseMergesFinishedSearches() throws {
+        func node(_ n: Int, _ state: String) -> String {
+            #"{"number":\#(n),"title":"t","url":"https://x/\#(n)","state":"\#(state)","isDraft":false,"repository":{"nameWithOwner":"o/r"}}"#
+        }
+        let json = #"{"data":{"viewer":{"login":"me"},"search":{"nodes":[\#(node(1, "OPEN"))]},"#
+            + #""searchDone":{"nodes":[\#(node(2, "MERGED"))]},"#
+            + #""assigned":{"nodes":[]},"reviewing":{"nodes":[\#(node(3, "OPEN"))]},"#
+            + #""assignedDone":{"nodes":[\#(node(4, "CLOSED"))]},"reviewingDone":{"nodes":[\#(node(3, "OPEN"))]}}}"#
+        let r = try GitHubClient.parse(Data(json.utf8))
+        XCTAssertEqual(r.pullRequests.map(\.number), [1, 2])
+        XCTAssertEqual(r.pullRequests.map(\.status), [.open, .merged])
+        XCTAssertEqual(r.assigned.map(\.number), [3, 4])
+        XCTAssertEqual(r.assigned.last?.status, .closed)
+    }
+
     func testRetriesOnceOn401WithFreshToken() async throws {
         var calls = 0
         var tokens = ["old", "new"]
