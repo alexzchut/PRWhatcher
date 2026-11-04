@@ -95,8 +95,11 @@ struct ContentView: View {
                                     Text("loading…").font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer()
+                                // Same 50 pt cell as PRRow's trash button so the icons line up under Actions.
                                 Button { store.removeCustomPR(ref) } label: { Image(systemName: "trash") }
-                                    .buttonStyle(.borderless).help("Remove")
+                                    .buttonStyle(.borderless)
+                                    .frame(width: 50)
+                                    .help("Remove")
                             }
                         }
                     }
