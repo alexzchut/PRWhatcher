@@ -11,8 +11,11 @@ extension VerticalAlignment {
 
 enum Col {
     static let repo: CGFloat = 130
-    static let status: CGFloat = 125
-    static let copilot: CGFloat = 60
+    static let status: CGFloat = 105
+    static let reviewers: CGFloat = 56
+    static let copilot: CGFloat = 44
+    /// The "Review" group header spans both review sub-columns and the gap between them.
+    static let review: CGFloat = reviewers + 8 + copilot
 }
 
 struct ContentView: View {
@@ -56,10 +59,19 @@ struct ContentView: View {
             if tab == .custom { addBar }
             HStack(alignment: .bottom, spacing: 12) {
                 Text("Repo").frame(width: Col.repo, alignment: .leading)
-                HStack(spacing: 8) {
+                HStack(alignment: .bottom, spacing: 8) {
                     Text("PR").frame(maxWidth: .infinity, alignment: .leading)
                     Text("Status").frame(width: Col.status, alignment: .leading)
-                    Text("Review").frame(width: Col.copilot, alignment: .leading)
+                    VStack(spacing: 2) {
+                        Text("Review")
+                        Divider()
+                        HStack(spacing: 8) {
+                            Text("Reviewers").frame(width: Col.reviewers, alignment: .leading)
+                            Text("Copilot").frame(width: Col.copilot, alignment: .leading)
+                        }
+                        .font(.caption2)
+                    }
+                    .frame(width: Col.review)
                     // Spans the row's trash column: 50 pt button + 6 pt gap, minus this stack's 8 pt spacing.
                     if tab == .custom { Text("Actions").frame(width: 48, alignment: .center) }
                 }
@@ -215,12 +227,12 @@ struct PRRow: View {
                         .alignmentGuide(.titleLine) { d in d[.firstTextBaseline] - 5 }
                 }
                 Spacer(minLength: 4)
-                HStack(spacing: 8) {
-                    StatusBadge(status: pr.status)
-                    OthersCell(review: pr.review)
-                }
-                .frame(width: Col.status, alignment: .leading)
-                // An empty cell (no Copilot review) would collapse and shift Status; keep the column width fixed.
+                StatusBadge(status: pr.status)
+                    .frame(width: Col.status, alignment: .leading)
+                // Empty review cells would collapse and shift the columns; keep their widths fixed.
+                Color.clear
+                    .frame(width: Col.reviewers, height: 1)
+                    .overlay(alignment: .leading) { OthersCell(review: pr.review) }
                 Color.clear
                     .frame(width: Col.copilot, height: 1)
                     .overlay(alignment: .leading) { CopilotCell(review: pr.review) }
