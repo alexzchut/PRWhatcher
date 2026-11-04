@@ -2,6 +2,19 @@
 
 A macOS menu bar app that watches the pull requests **you authored** on a chosen set of GitHub repos and alerts you when someone else comments, reviews, or pushes commits.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/opened-by-me-dark.png">
+  <img src="docs/screenshots/opened-by-me.png" alt="PRWatcher panel showing the Opened by me tab" width="720">
+</picture>
+
+## Screenshots
+
+| Assigned to me | Other |
+| --- | --- |
+| <img src="docs/screenshots/assigned-to-me.png" alt="Assigned to me tab" width="420"> | <img src="docs/screenshots/other.png" alt="Other tab with PRs added by link" width="420"> |
+
+<img src="docs/screenshots/settings.png" alt="Settings inside the panel" width="560">
+
 ## Features
 
 - Polls GitHub on an interval you choose (1–60 min, default 5) with a single GraphQL query.
