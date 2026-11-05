@@ -51,17 +51,32 @@ public enum PRStatus: String, Codable {
     }
 }
 
-/// Which PR states the repo searches return. Open, ready-for-review PRs are always included.
+/// Which PRs the repo searches return. Open, ready-for-review PRs are always included.
 public struct StatusFilter: Codable, Equatable {
     public var draft: Bool
     public var merged: Bool
     public var closed: Bool
+    /// Also list PRs in Assigned to me whose review was requested from one of the viewer's teams.
+    public var teamReviews: Bool
 
-    public init(draft: Bool = false, merged: Bool = false, closed: Bool = false) {
+    public init(draft: Bool = false, merged: Bool = false, closed: Bool = false, teamReviews: Bool = false) {
         self.draft = draft
         self.merged = merged
         self.closed = closed
+        self.teamReviews = teamReviews
     }
+
+    /// Settings saved by older versions lack newer keys; a failed decode would reset the whole filter.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        draft = try c.decodeIfPresent(Bool.self, forKey: .draft) ?? false
+        merged = try c.decodeIfPresent(Bool.self, forKey: .merged) ?? false
+        closed = try c.decodeIfPresent(Bool.self, forKey: .closed) ?? false
+        teamReviews = try c.decodeIfPresent(Bool.self, forKey: .teamReviews) ?? false
+    }
+
+    /// Search qualifier for PRs waiting on the viewer's review.
+    var reviewQualifier: String { teamReviews ? "review-requested:@me" : "user-review-requested:@me" }
 
     /// Search qualifier for open PRs.
     var openQualifier: String { draft ? "is:open" : "is:open draft:false" }

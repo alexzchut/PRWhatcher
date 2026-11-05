@@ -43,7 +43,24 @@ final class ClientTests: XCTestCase {
         let text = String(decoding: body ?? Data(), as: UTF8.self).replacingOccurrences(of: "\\/", with: "/")
         XCTAssertTrue(text.contains("is:pr is:open draft:false author:@me repo:o/r repo:o/s"))
         XCTAssertTrue(text.contains("is:pr is:open draft:false assignee:@me -author:@me repo:o/r repo:o/s"))
-        XCTAssertTrue(text.contains("is:pr is:open draft:false user-review-requested:@me -author:@me repo:o/r repo:o/s"))
+        XCTAssertTrue(text.contains("is:pr is:open draft:false user-review-requested:@me -author:@me sort:updated-desc repo:o/r repo:o/s"))
+    }
+
+    func testTeamReviewRequestsAreOnlySearchedWhenEnabled() async throws {
+        let off = try await capturedBody(StatusFilter())
+        XCTAssertTrue(off.contains(" user-review-requested:@me "))
+        XCTAssertFalse(off.contains(" review-requested:@me "))
+
+        let on = try await capturedBody(StatusFilter(merged: true, teamReviews: true))
+        XCTAssertTrue(on.contains("is:pr is:open draft:false review-requested:@me -author:@me sort:updated-desc repo:o/r"))
+        XCTAssertTrue(on.contains("is:pr is:merged review-requested:@me -author:@me sort:updated-desc repo:o/r"))
+        XCTAssertFalse(on.contains("user-review-requested"))
+    }
+
+    func testStatusFilterSavedBeforeTeamReviewsExistedKeepsItsValues() throws {
+        let saved = Data(#"{"draft":true,"merged":false,"closed":true}"#.utf8)
+        let filter = try JSONDecoder().decode(StatusFilter.self, from: saved)
+        XCTAssertEqual(filter, StatusFilter(draft: true, closed: true))
     }
 
     private func capturedBody(_ statuses: StatusFilter) async throws -> String {

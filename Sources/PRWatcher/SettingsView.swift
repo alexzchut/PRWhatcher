@@ -64,6 +64,14 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {
+                Toggle("Include team review requests", isOn: $store.statuses.teamReviews)
+            } header: {
+                Text("Assigned to me")
+            } footer: {
+                Text("Also lists PRs waiting for a review from one of your teams, up to the 50 most recently updated. A PR leaves the list once GitHub no longer shows that request as pending.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section {
                 Stepper("Check every \(store.intervalMinutes) min", value: $store.intervalMinutes, in: 1...60)
                 Toggle("Launch at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, on in

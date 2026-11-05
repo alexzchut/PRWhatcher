@@ -108,13 +108,15 @@ public final class GitHubClient: PRFetching {
         if !repos.isEmpty {
             let scope = repos.map { "repo:\($0)" }.joined(separator: " ")
             let open = statuses.openQualifier
+            let review = statuses.reviewQualifier
             variables["q"] = "is:pr \(open) author:@me " + scope
             variables["a"] = "is:pr \(open) assignee:@me -author:@me " + scope
-            variables["r"] = "is:pr \(open) user-review-requested:@me -author:@me " + scope
+            // Team requests can exceed the search's page size; keep the most recently updated ones.
+            variables["r"] = "is:pr \(open) \(review) -author:@me sort:updated-desc " + scope
             if let finished {
                 variables["qd"] = "is:pr \(finished) author:@me sort:updated-desc " + scope
                 variables["ad"] = "is:pr \(finished) assignee:@me -author:@me sort:updated-desc " + scope
-                variables["rd"] = "is:pr \(finished) user-review-requested:@me -author:@me sort:updated-desc " + scope
+                variables["rd"] = "is:pr \(finished) \(review) -author:@me sort:updated-desc " + scope
             }
         }
         let query = Self.buildQuery(includeSearch: !repos.isEmpty, finished: finished != nil, custom: custom)
@@ -178,7 +180,7 @@ public final class GitHubClient: PRFetching {
         let viewer = body.viewer.login ?? ""
         func nodes(_ searches: Search?...) -> [PRNode?] { searches.flatMap { $0?.nodes ?? [] } }
         let prs = nodes(body.search, body.searchDone).compactMap { $0?.toPullRequest(viewer: viewer) }
-        // "Assigned to me" = assigned to the viewer or personally asked for their review, without duplicates.
+        // "Assigned to me" = assigned to the viewer or asked for their review, without duplicates.
         var seen = Set<String>()
         let assigned = nodes(body.assigned, body.reviewing, body.assignedDone, body.reviewingDone)
             .compactMap { $0?.toPullRequest(viewer: viewer) }
