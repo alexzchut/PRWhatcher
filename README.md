@@ -20,7 +20,7 @@ A macOS menu bar app that watches the pull requests **you authored** on a chosen
 - Polls GitHub on an interval you choose (1–60 min, default 5) with a single GraphQL query.
 - Alerts on new **comments** (conversation and inline), **reviews** and **commits** by other people. Your own activity is ignored.
 - Menu bar icon with an unread count, plus one native notification per PR per check. Clicking a notification opens the PR (or the exact comment/review/commit when there is only one).
-- Popover with three tabs, grouped by repo: **Opened by me**, **Assigned to me** (PRs by others that are assigned to you or waiting for your own review; PRs requested only through a team, and PRs you already reviewed, are not included) and **Other** (any PRs you add by link, see below). Columns:
+- Popover with three tabs, grouped by repo: **Opened by me**, **Assigned to me** (PRs by others that are assigned to you or waiting for your own review; PRs requested only through a team are included if you turn that on in Settings, and PRs you already reviewed are not included) and **Other** (any PRs you add by link, see below). Columns:
   - **Status**: Open / Approved / Changes requested (or Draft / Merged / Closed when those are included, see below), plus the number of unresolved comment threads from other reviewers.
   - **Review**: the verdict dot from the latest GitHub Copilot review (🟢 approval recommended, 🟡 changes recommended, 🔵 needs a closer look) and its unresolved-thread count. Hover the dot to read the review text.
 - PRs with new activity get a red dot and bold title. Opening the panel clears the menu bar count; the dots disappear the next time you open it.
@@ -48,7 +48,8 @@ Notifications only work from the built `.app`, not from `swift run`. macOS asks 
 1. Click the menu bar icon, then **Settings**. Settings opens inside the same panel; use **‹ Back** (or Esc) to return to the list.
 2. Paste a repo as `owner/name` or a GitHub URL (for example `https://github.com/owner/repo`) and click **Add**.
 3. Under **PR statuses to include**, choose which PRs the Opened by me and Assigned to me tabs show. Open is always on; Draft, Merged and Closed are off by default. Merged and closed PRs are limited to the 20 most recently updated per search. The Other tab always shows every status.
-4. Set the check interval. **Test GitHub token** confirms the `gh` login works.
+4. Under **Assigned to me**, turn on **Include team review requests** to also list PRs waiting for a review from one of your teams. It's off by default and limited to the 50 most recently updated PRs.
+5. Set the check interval. **Test GitHub token** confirms the `gh` login works.
 
 **Other tab:** paste a PR link (for example `https://github.com/owner/repo/pull/123`, or `owner/repo#123`) and press **+**. Use the trash icon in the **Actions** column to remove a PR. A newly added PR shows "loading…" until it has been fetched. PRs on this tab are tracked and alert like your own, they don't need to be in a watched repo, and a PR that can't be read (deleted or no access) is listed as "not found or no access" so you can remove it. They stay in the list after they are merged or closed until you remove them.
 
