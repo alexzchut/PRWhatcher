@@ -1,11 +1,31 @@
 import Foundation
 
-/// Builds the task handed to Claude Code when the user clicks Resolve on a PR: check out the PR locally,
-/// address each unresolved review thread, push, reply to every thread and resolve the addressed ones.
+/// Where Claude works on a PR's review fixes: a git worktree next to the user's checkout, on its own branch
+/// started from the PR's branch, so the checkout's branch and uncommitted changes are never touched.
+public struct ResolveWorkspace: Equatable {
+    public let checkout: String     // the user's local clone
+    public let worktree: String     // sibling folder, e.g. ~/code/zapp-pr-5092
+    public let branch: String       // e.g. pr-5092-review-fixes
+    public let base: String         // the PR's head branch; fixes are pushed back to it
+
+    public init(checkout: String, prNumber: Int, base: String) {
+        let url = URL(fileURLWithPath: checkout).standardizedFileURL
+        self.checkout = url.path
+        self.worktree = url.deletingLastPathComponent()
+            .appendingPathComponent("\(url.lastPathComponent)-pr-\(prNumber)").path
+        self.branch = "pr-\(prNumber)-review-fixes"
+        self.base = base
+    }
+}
+
+/// Builds the task handed to Claude Code when the user clicks Resolve on a PR: work through each unresolved
+/// review thread on a fix branch, push the fixes to the PR, reply to every thread and resolve the addressed ones.
 public enum ClaudeResolve {
-    public static func prompt(for pr: PullRequest) -> String {
+    public static func prompt(for pr: PullRequest, in ws: ResolveWorkspace) -> String {
         var lines = [
             "Resolve the open review comments on \(pr.url.absoluteString) (\(pr.repo) #\(pr.number): \"\(pr.title)\").",
+            "",
+            "You are in a git worktree made for this: \(ws.worktree), on branch `\(ws.branch)`, started from `origin/\(ws.base)` (the PR's branch). Do all the work here. Don't touch my main checkout at \(ws.checkout).",
             "",
             "Unresolved review threads (\(pr.unresolvedThreads.count)):",
         ]
@@ -23,30 +43,41 @@ public enum ClaudeResolve {
         lines += [
             "",
             "Steps:",
-            "1. Confirm this folder is a checkout of \(pr.repo) (`gh repo view --json nameWithOwner`). Run `git status`; if there are uncommitted changes, stop and tell me instead of continuing.",
-            "2. Check out the PR branch and update it: `gh pr checkout \(pr.number) && git pull`.",
-            "3. For each thread, read the whole conversation and the code it points to. The comment text above is only the start of the thread. To read a thread in full:",
+            "1. Confirm this is a checkout of \(pr.repo) (`gh repo view --json nameWithOwner`) and you're on `\(ws.branch)`. If this worktree is left over from an earlier run, check `git status` and `git log --oneline origin/\(ws.base)..HEAD`: if there are uncommitted changes or unpushed commits, stop and tell me. Otherwise bring it up to date with `git merge --ff-only origin/\(ws.base)`.",
+            "2. For each thread, read the whole conversation and the code it points to. The comment text above is only the start of the thread. To read a thread in full:",
             "   gh api graphql -f query='query($id:ID!){node(id:$id){... on PullRequestReviewThread{path line isResolved comments(first:50){nodes{author{login} body url}}}}}' -f id=<thread id>",
-            "4. Decide for each thread whether the code should change. Make the changes that are warranted; don't change code just to satisfy a comment you think is wrong.",
-            "5. Run the project's build and tests if it has them, then commit with a clear message and push to the PR branch.",
+            "3. Decide for each thread whether the code should change. Make the changes that are warranted; don't change code just to satisfy a comment you think is wrong.",
+            "4. Run the project's build and tests if it has them, then commit on `\(ws.branch)` with a clear message.",
+            "5. Push the fixes to the PR: `git push origin HEAD:\(ws.base)`. Never force-push. If the push is rejected because the PR branch moved, run `git fetch origin \(ws.base) && git rebase origin/\(ws.base)`, re-run the tests and push again.",
             "6. Reply on every thread: what you changed (with the commit SHA), or why you left the code as it is.",
             "   gh api graphql -f query='mutation($id:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$id,body:$body}){comment{url}}}' -f id=<thread id> -f body=<reply>",
             "7. Resolve each thread you fixed or answered conclusively. Leave a thread unresolved when it needs my decision, and say so in the reply.",
             "   gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -f id=<thread id>",
-            "8. Finish with a short table: each thread, what you did (fixed / no change / needs my input), and whether it is resolved.",
+            "8. Finish with a short table: each thread, what you did (fixed / no change / needs my input), and whether it is resolved. Leave the worktree in place for me to review; it can be removed later with `git worktree remove \(ws.worktree)`.",
         ]
         return lines.joined(separator: "\n")
     }
 
-    /// A `.command` script that Terminal runs: starts an interactive Claude Code session in `directory`.
-    /// The script deletes itself once started, so the prompt doesn't linger in the temp folder.
-    public static func launchScript(directory: String, prompt: String) -> String {
-        """
+    /// A `.command` script that the terminal runs: creates (or reuses) the PR's worktree on its fix branch and
+    /// starts an interactive Claude Code session there. The script deletes itself once started, so the prompt
+    /// doesn't linger in the temp folder.
+    public static func launchScript(_ ws: ResolveWorkspace, prompt: String) -> String {
+        let checkout = shellQuote(ws.checkout), worktree = shellQuote(ws.worktree)
+        let base = shellQuote(ws.base), branch = shellQuote(ws.branch), remoteBase = shellQuote("origin/" + ws.base)
+        return """
         #!/bin/zsh -l
         rm -f "$0"
         \(pathExport)
-        cd \(shellQuote(directory)) || { echo "Folder not found: "\(shellQuote(directory)); exit 1; }
+        cd \(checkout) || { echo "Folder not found: "\(checkout); exit 1; }
         if ! command -v claude >/dev/null; then echo "Claude Code (claude) is not installed or not on PATH"; exit 1; fi
+        git fetch origin \(base) || { echo "Couldn't fetch the PR branch "\(base); exit 1; }
+        if [ -d \(worktree) ]; then
+          echo "Reusing worktree "\(worktree)
+        else
+          git worktree prune
+          git worktree add -B \(branch) \(worktree) \(remoteBase) || { echo "Couldn't create the worktree "\(worktree); exit 1; }
+        fi
+        cd \(worktree) || exit 1
         claude \(shellQuote(prompt))
 
         """
@@ -54,8 +85,9 @@ public enum ClaudeResolve {
 
     public static let iTermBundleID = "com.googlecode.iterm2"
 
-    /// AppleScript that runs `script` in a new iTerm2 window, typed into the user's shell so the window stays
-    /// open after Claude exits. If iTerm2 wasn't running, the window it opens on launch is reused.
+    /// AppleScript that runs `script` in iTerm2, typed into the user's shell so the session stays open after
+    /// Claude exits. Opens a new tab in the front window when iTerm2 already has one; a new window otherwise.
+    /// If iTerm2 wasn't running, the window it opens on launch is used.
     public static func iTermAppleScript(running script: String) -> String {
         let command = shellQuote(script)
             .replacingOccurrences(of: "\\", with: "\\\\")
@@ -64,8 +96,11 @@ public enum ClaudeResolve {
         set wasRunning to application id "\(iTermBundleID)" is running
         tell application id "\(iTermBundleID)"
             activate
-            if wasRunning or (count of windows) = 0 then
+            if (count of windows) = 0 then
                 set w to (create window with default profile)
+            else if wasRunning then
+                set w to current window
+                tell w to create tab with default profile
             else
                 set w to current window
             end if

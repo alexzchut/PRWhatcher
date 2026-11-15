@@ -41,7 +41,7 @@ public final class GitHubClient: PRFetching {
 
     static let fragment = """
     fragment PRFields on PullRequest {
-          number title url reviewDecision state isDraft
+          number title url reviewDecision state isDraft headRefName
           repository { nameWithOwner }
           comments(last: 30) { nodes { id url bodyText createdAt author { login } } }
           reviews(last: 30) { nodes { id url state bodyText createdAt author { login } } }
@@ -268,6 +268,7 @@ public final class GitHubClient: PRFetching {
         let reviewDecision: String?
         let state: String?
         let isDraft: Bool?
+        let headRefName: String?
         let repository: Repo?
         let comments: Nodes<CommentNode>?
         let reviews: Nodes<CommentNode>?
@@ -326,7 +327,7 @@ public final class GitHubClient: PRFetching {
             return PullRequest(repo: repo, number: number, title: title, url: prURL, events: events,
                                status: PRStatus(reviewDecision: reviewDecision, state: state, isDraft: isDraft ?? false),
                                review: reviewSummary(viewer: viewer),
-                               unresolvedThreads: openThreads(viewer: viewer))
+                               unresolvedThreads: openThreads(viewer: viewer), headRef: headRefName)
         }
 
         /// Unresolved threads someone else started; the viewer's own threads are notes, not feedback to address.

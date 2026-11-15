@@ -40,6 +40,20 @@ final class ClaudeResolveTests: XCTestCase {
         XCTAssertTrue(pr.unresolvedThreads[1].isCopilot)
     }
 
+    func testParsesHeadRef() throws {
+        let json = #"{"data":{"viewer":{"login":"me"},"search":{"nodes":[{"number":1,"title":"t","url":"https://github.com/o/r/pull/1","headRefName":"feat/x","repository":{"nameWithOwner":"o/r"}}]}}}"#
+        XCTAssertEqual(try GitHubClient.parse(json.data(using: .utf8)!).pullRequests[0].headRef, "feat/x")
+        XCTAssertTrue(GitHubClient.fragment.contains("headRefName"))
+    }
+
+    func testWorkspaceIsASiblingWorktreeOnAFixBranch() {
+        let ws = ResolveWorkspace(checkout: "/Users/me/code/zapp/", prNumber: 5092, base: "feat/x")
+        XCTAssertEqual(ws.checkout, "/Users/me/code/zapp")
+        XCTAssertEqual(ws.worktree, "/Users/me/code/zapp-pr-5092")
+        XCTAssertEqual(ws.branch, "pr-5092-review-fixes")
+        XCTAssertEqual(ws.base, "feat/x")
+    }
+
     func testPromptListsEveryThreadAndTheSteps() {
         let pr = PullRequest(repo: "o/r", number: 7, title: "Add thing",
                              url: URL(string: "https://github.com/o/r/pull/7")!, events: [],
@@ -48,18 +62,22 @@ final class ClaudeResolveTests: XCTestCase {
                                              url: URL(string: "https://github.com/o/r/pull/7#discussion_r1"),
                                              body: "rename\nthis"),
                                 ReviewThread(id: "PRRT_b", author: "Copilot", body: "null check"),
-                             ])
-        let p = ClaudeResolve.prompt(for: pr)
+                             ], headRef: "feat/x")
+        let ws = ResolveWorkspace(checkout: "/c/r", prNumber: 7, base: "feat/x")
+        let p = ClaudeResolve.prompt(for: pr, in: ws)
         XCTAssertTrue(p.contains("https://github.com/o/r/pull/7"))
         XCTAssertTrue(p.contains("1. alice on a.swift:3"))
         XCTAssertTrue(p.contains("thread id: PRRT_a"))
         XCTAssertTrue(p.contains("link: https://github.com/o/r/pull/7#discussion_r1"))
         XCTAssertTrue(p.contains("comment: rename this"))
         XCTAssertTrue(p.contains("2. Copilot (Copilot)"))
-        XCTAssertTrue(p.contains("gh pr checkout 7"))
+        XCTAssertTrue(p.contains("git worktree made for this: /c/r-pr-7, on branch `pr-7-review-fixes`"))
+        XCTAssertTrue(p.contains("Don't touch my main checkout at /c/r"))
+        XCTAssertTrue(p.contains("git push origin HEAD:feat/x"))
+        XCTAssertTrue(p.contains("Never force-push"))
+        XCTAssertFalse(p.contains("gh pr checkout"))
         XCTAssertTrue(p.contains("addPullRequestReviewThreadReply"))
         XCTAssertTrue(p.contains("resolveReviewThread"))
-        XCTAssertTrue(p.contains("uncommitted changes, stop"))
     }
 
     func testShellQuote() {
@@ -67,38 +85,85 @@ final class ClaudeResolveTests: XCTestCase {
         XCTAssertEqual(ClaudeResolve.shellQuote("it's"), #"'it'\''s'"#)
     }
 
-    /// Runs the generated script under zsh with a stub `claude` to check the prompt arrives intact.
-    func testLaunchScriptPassesPromptVerbatim() throws {
+    @discardableResult
+    private func run(_ exe: String, _ args: [String], in dir: URL? = nil) throws -> Int32 {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: exe)
+        p.arguments = args
+        p.currentDirectoryURL = dir
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        try p.run()
+        p.waitUntilExit()
+        return p.terminationStatus
+    }
+
+    private func git(_ args: String..., in dir: URL) throws {
+        let status = try run("/usr/bin/git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"] + args, in: dir)
+        XCTAssertEqual(status, 0, "git \(args.joined(separator: " "))")
+    }
+
+    /// Runs the generated script under zsh against a real local "origin" with a stub `claude`: the worktree is
+    /// created on the fix branch from the PR branch, reused on a second run, the user's checkout stays on its
+    /// branch, and the prompt arrives intact.
+    func testLaunchScriptCreatesWorktreeAndPassesPrompt() throws {
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let bin = tmp.appendingPathComponent("bin"), work = tmp.appendingPathComponent("my repo")
-        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tmp) }
+        let fm = FileManager.default
+        let bin = tmp.appendingPathComponent("bin"), origin = tmp.appendingPathComponent("origin")
+        let checkout = tmp.appendingPathComponent("my repo")
+        for d in [bin, origin] { try fm.createDirectory(at: d, withIntermediateDirectories: true) }
+        defer { try? fm.removeItem(at: tmp) }
+
+        try git("init", "-q", in: origin)
+        try git("commit", "-q", "--allow-empty", "-m", "base", in: origin)
+        try git("checkout", "-q", "-b", "feat/x", in: origin)
+        try git("commit", "-q", "--allow-empty", "-m", "pr work", in: origin)
+        try git("checkout", "-q", "main", in: origin)
+        try git("clone", "-q", origin.path, checkout.path, in: tmp)
 
         let out = tmp.appendingPathComponent("out.txt")
         let stub = bin.appendingPathComponent("claude")
-        try "#!/bin/sh\npwd > '\(out.path)'\nprintf '%s' \"$1\" >> '\(out.path)'\n".write(to: stub, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stub.path)
+        try """
+        #!/bin/sh
+        pwd > '\(out.path)'
+        git branch --show-current >> '\(out.path)'
+        git log -1 --format=%s >> '\(out.path)'
+        printf '%s' "$1" >> '\(out.path)'
 
+        """.write(to: stub, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stub.path)
+
+        let ws = ResolveWorkspace(checkout: checkout.path, prNumber: 7, base: "feat/x")
         let prompt = "it's \"quoted\" $HOME `x`\nline 2"
-        let script = tmp.appendingPathComponent("run.command")
-        // Swap the script's PATH line so only the stub can be found, never a real installed `claude`.
-        let lines = ClaudeResolve.launchScript(directory: work.path, prompt: prompt)
-            .components(separatedBy: "\n")
-            .map { $0.hasPrefix("export PATH=") ? "export PATH=\"\(bin.path):/usr/bin:/bin\"" : $0 }
-        XCTAssertTrue(lines.contains("export PATH=\"\(bin.path):/usr/bin:/bin\""))
-        try lines.joined(separator: "\n").write(to: script, atomically: true, encoding: .utf8)
+        func launch() throws -> [String] {
+            let script = tmp.appendingPathComponent("run.command")
+            // Swap the script's PATH line so only the stub can be found, never a real installed `claude`.
+            let lines = ClaudeResolve.launchScript(ws, prompt: prompt)
+                .components(separatedBy: "\n")
+                .map { $0.hasPrefix("export PATH=") ? "export PATH=\"\(bin.path):/usr/bin:/bin\"" : $0 }
+            XCTAssertTrue(lines.contains("export PATH=\"\(bin.path):/usr/bin:/bin\""))
+            try lines.joined(separator: "\n").write(to: script, atomically: true, encoding: .utf8)
+            XCTAssertEqual(try run("/bin/zsh", ["-f", script.path]), 0)
+            XCTAssertFalse(fm.fileExists(atPath: script.path), "script removes itself")
+            return try String(contentsOf: out, encoding: .utf8).components(separatedBy: "\n")
+        }
+
+        for _ in 0..<2 {      // second run reuses the existing worktree
+            let o = try launch()
+            XCTAssertTrue(o[0].hasSuffix("/my repo-pr-7"), o[0])
+            XCTAssertEqual(o[1], "pr-7-review-fixes")
+            XCTAssertEqual(o[2], "pr work")
+            XCTAssertEqual(o.dropFirst(3).joined(separator: "\n"), prompt)
+        }
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        p.arguments = ["-f", script.path]
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        p.arguments = ["-C", checkout.path, "branch", "--show-current"]
+        let pipe = Pipe()
+        p.standardOutput = pipe
         try p.run()
         p.waitUntilExit()
-
-        XCTAssertEqual(p.terminationStatus, 0)
-        let output = try String(contentsOf: out, encoding: .utf8)
-        XCTAssertTrue(output.hasSuffix(prompt))
-        XCTAssertTrue(output.contains("my repo"))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: script.path), "script removes itself")
+        XCTAssertEqual(String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self), "main\n",
+                       "the user's checkout stays on its branch")
     }
 
     // MARK: - CLI check (stubs only; a real `claude` is never on the test PATH)
@@ -144,13 +209,14 @@ final class ClaudeResolveTests: XCTestCase {
     }
 
     func testLaunchScriptUsesSamePathAsCheck() {
-        XCTAssertTrue(ClaudeResolve.launchScript(directory: "/x", prompt: "p").contains(ClaudeResolve.pathExport))
+        XCTAssertTrue(ClaudeResolve.launchScript(ResolveWorkspace(checkout: "/x", prNumber: 1, base: "b"), prompt: "p").contains(ClaudeResolve.pathExport))
     }
 
     func testITermScriptQuotesThePath() {
         let src = ClaudeResolve.iTermAppleScript(running: #"/tmp/a b/it's "x".command"#)
         XCTAssertTrue(src.contains(#"application id "com.googlecode.iterm2""#))
         XCTAssertTrue(src.contains("create window with default profile"))
+        XCTAssertTrue(src.contains("create tab with default profile"))
         // shell-quoted, then escaped for an AppleScript string literal
         XCTAssertTrue(src.contains(#"write text "'/tmp/a b/it'\\''s \"x\".command'""#), src)
     }

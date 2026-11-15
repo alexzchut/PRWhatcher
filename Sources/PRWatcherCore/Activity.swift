@@ -147,10 +147,12 @@ public struct PullRequest: Codable, Hashable, Identifiable {
     public let review: ReviewSummary
     /// Unresolved review threads started by someone other than the viewer (Copilot included).
     public let unresolvedThreads: [ReviewThread]
+    public let headRef: String?     // the PR's branch name
 
     public init(repo: String, number: Int, title: String, url: URL, events: [ActivityEvent],
                 status: PRStatus = .open, review: ReviewSummary = ReviewSummary(),
-                unresolvedThreads: [ReviewThread] = []) {
+                unresolvedThreads: [ReviewThread] = [], headRef: String? = nil) {
+        self.headRef = headRef
         self.status = status
         self.review = review
         self.unresolvedThreads = unresolvedThreads

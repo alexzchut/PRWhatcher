@@ -21,7 +21,9 @@ enum ClaudeLauncher {
             store.setLocalPath(nil, for: pr.repo)     // forget a folder that moved or is no longer a checkout
             return .needsFolder
         }
-        if let error = open(directory: folder, prompt: ClaudeResolve.prompt(for: pr)) { return .failed(error) }
+        guard let base = pr.headRef else { return .failed("Couldn't read the branch of #\(pr.number); refresh and try again") }
+        let ws = ResolveWorkspace(checkout: folder, prNumber: pr.number, base: base)
+        if let error = open(ws, prompt: ClaudeResolve.prompt(for: pr, in: ws)) { return .failed(error) }
         return .launched
     }
 
@@ -69,11 +71,11 @@ enum ClaudeLauncher {
     }
 
     /// Writes the launch script and runs it in iTerm2 when installed, otherwise in Terminal.
-    private static func open(directory: String, prompt: String) -> String? {
+    private static func open(_ ws: ResolveWorkspace, prompt: String) -> String? {
         let script = FileManager.default.temporaryDirectory
             .appendingPathComponent("prwatcher-resolve-\(UUID().uuidString).command")
         do {
-            try ClaudeResolve.launchScript(directory: directory, prompt: prompt)
+            try ClaudeResolve.launchScript(ws, prompt: prompt)
                 .write(to: script, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
         } catch {
