@@ -29,13 +29,15 @@ struct ContentView: View {
     @State private var newPR = ""
     @State private var addMessage = ""
     @State private var resolveMessage = ""
+    /// Repo whose local folder must be set before Resolve can run; Settings opens on it.
+    @State private var folderNeeded: String?
 
     enum Tab: String { case all, assigned, custom }
 
     var body: some View {
         Group {
             if showSettings {
-                SettingsView(store: store) { showSettings = false }
+                SettingsView(store: store, folderNeeded: folderNeeded) { showSettings = false; folderNeeded = nil }
             } else {
                 list
             }
@@ -46,7 +48,7 @@ struct ContentView: View {
             highlighted = []
             resolveMessage = ""
             // The folder picker closes the panel and reopens it afterwards; stay on Settings for that.
-            if !ClaudeLauncher.isPicking { showSettings = false }
+            if !ClaudeLauncher.isPicking { showSettings = false; folderNeeded = nil }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in panelOpened() }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in highlighted = [] }
@@ -189,7 +191,14 @@ struct ContentView: View {
     private var showsActions: Bool { tab == .custom || (tab == .all && store.claudeEnabled) }
 
     private func resolve(_ pr: PullRequest) {
-        ClaudeLauncher.resolve(pr, store: store) { resolveMessage = $0 ?? "" }
+        switch ClaudeLauncher.resolve(pr, store: store) {
+        case .launched: resolveMessage = ""
+        case .failed(let m): resolveMessage = m
+        case .needsFolder:
+            resolveMessage = ""
+            folderNeeded = pr.repo
+            showSettings = true
+        }
     }
 
     private func remove(_ key: String) {

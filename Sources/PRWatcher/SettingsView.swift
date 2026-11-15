@@ -5,6 +5,8 @@ import PRWatcherCore
 
 struct SettingsView: View {
     @ObservedObject var store: Store
+    /// Set when Resolve was clicked for a repo without a local folder: opens on Repositories and highlights it.
+    var folderNeeded: String? = nil
     let onClose: () -> Void
     @AppStorage("settingsTab") private var tab = Tab.repositories
     @State private var newRepo = ""
@@ -41,6 +43,7 @@ struct SettingsView: View {
                 .frame(height: 400)
         }
         .onChange(of: tab) { message = "" }
+        .onAppear { if folderNeeded != nil { tab = .repositories } }
     }
 
     private var form: some View {
@@ -58,6 +61,19 @@ struct SettingsView: View {
 
     // Plain rows, not a List: a List nested in a Form doesn't scroll, so a fixed height would clip it.
     @ViewBuilder private var repositories: some View {
+        if let repo = folderNeeded, store.claudeEnabled {
+            Section {
+                if store.localPath(for: repo) == nil {
+                    Label("Set the local folder for \(repo) to resolve its review comments with Claude Code. Click Folder… next to it below and choose your checkout.",
+                          systemImage: "folder.badge.questionmark")
+                        .foregroundStyle(.orange)
+                } else {
+                    Label("Folder set for \(repo). Go Back and click the wand again to start Claude Code.",
+                          systemImage: "checkmark.circle")
+                        .foregroundStyle(.green)
+                }
+            }
+        }
         Section {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Repository URL or owner/name").font(.caption).foregroundStyle(.secondary)
@@ -86,6 +102,7 @@ struct SettingsView: View {
                     }
                     Button("Remove") { store.removeRepo(r) }
                 }
+                .listRowBackground(isFolderNeeded(r) ? Color.orange.opacity(0.15) : nil)
             }
         } header: {
             Text("Repositories (owner/name)")
@@ -178,6 +195,10 @@ struct SettingsView: View {
                 }
             }
         })
+    }
+
+    private func isFolderNeeded(_ repo: String) -> Bool {
+        store.claudeEnabled && folderNeeded?.caseInsensitiveCompare(repo) == .orderedSame && store.localPath(for: repo) == nil
     }
 
     private func chooseFolder(for repo: String) {

@@ -8,22 +8,21 @@ enum ClaudeLauncher {
     /// True while the folder picker is up; the panel closes for it and keeps its Settings page for when it reopens.
     static private(set) var isPicking = false
 
-    /// Calls `done` with an error message, or nil when Terminal was opened (or the folder picker was cancelled).
-    static func resolve(_ pr: PullRequest, store: Store, done: @escaping @MainActor (String?) -> Void) {
-        guard !pr.unresolvedThreads.isEmpty else { return done("No unresolved review threads on #\(pr.number)") }
-        if let folder = store.localPath(for: pr.repo), isGitCheckout(folder) {
-            return done(open(directory: folder, prompt: ClaudeResolve.prompt(for: pr)))
+    enum Outcome: Equatable {
+        case launched
+        /// The repo has no usable local checkout yet; the user sets it in Settings → Repositories.
+        case needsFolder
+        case failed(String)
+    }
+
+    static func resolve(_ pr: PullRequest, store: Store) -> Outcome {
+        guard !pr.unresolvedThreads.isEmpty else { return .failed("No unresolved review threads on #\(pr.number)") }
+        guard let folder = store.localPath(for: pr.repo), isGitCheckout(folder) else {
+            store.setLocalPath(nil, for: pr.repo)     // forget a folder that moved or is no longer a checkout
+            return .needsFolder
         }
-        store.setLocalPath(nil, for: pr.repo)     // forget a folder that moved or is no longer a checkout
-        chooseFolder(for: pr.repo) { picked in
-            // On success Terminal takes focus; otherwise bring the panel back to show what happened.
-            @MainActor func fail(_ message: String?) { reopenPanel(); done(message) }
-            guard let picked else { return fail(nil) }
-            guard isGitCheckout(picked) else { return fail("\(picked) is not a git checkout") }
-            store.setLocalPath(picked, for: pr.repo)
-            if let error = open(directory: picked, prompt: ClaudeResolve.prompt(for: pr)) { return fail(error) }
-            done(nil)
-        }
+        if let error = open(directory: folder, prompt: ClaudeResolve.prompt(for: pr)) { return .failed(error) }
+        return .launched
     }
 
     /// Lets the user pick the checkout folder for `repo`; `done` gets nil when cancelled.
