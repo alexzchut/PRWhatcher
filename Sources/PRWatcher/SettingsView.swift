@@ -5,11 +5,16 @@ import PRWatcherCore
 
 struct SettingsView: View {
     @ObservedObject var store: Store
+    /// Set when Resolve was clicked for a repo without a local folder: opens on Repositories and highlights it.
+    var folderNeeded: String? = nil
     let onClose: () -> Void
     @AppStorage("settingsTab") private var tab = Tab.repositories
     @State private var newRepo = ""
     @State private var message = ""
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @State private var checkingClaude = false
+    @State private var claudeStatus = ""
+    @State private var claudeFailed = false
 
     enum Tab: String { case repositories, pullRequests, general }
 
@@ -38,6 +43,7 @@ struct SettingsView: View {
                 .frame(height: 400)
         }
         .onChange(of: tab) { message = "" }
+        .onAppear { if folderNeeded != nil { tab = .repositories } }
     }
 
     private var form: some View {
@@ -55,7 +61,20 @@ struct SettingsView: View {
 
     // Plain rows, not a List: a List nested in a Form doesn't scroll, so a fixed height would clip it.
     @ViewBuilder private var repositories: some View {
-        Section("Repositories (owner/name)") {
+        if let repo = folderNeeded, store.claudeEnabled {
+            Section {
+                if store.localPath(for: repo) == nil {
+                    Label("Set the local folder for \(repo) to resolve its review comments with Claude Code. Click Folder… next to it below and choose your checkout.",
+                          systemImage: "folder.badge.questionmark")
+                        .foregroundStyle(.orange)
+                } else {
+                    Label("Folder set for \(repo). Go Back and click the wand again to start Claude Code.",
+                          systemImage: "checkmark.circle")
+                        .foregroundStyle(.green)
+                }
+            }
+        }
+        Section {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Repository URL or owner/name").font(.caption).foregroundStyle(.secondary)
                 HStack {
@@ -67,10 +86,30 @@ struct SettingsView: View {
             }
             ForEach(store.repos, id: \.self) { r in
                 HStack {
-                    Text(r)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(r)
+                        if store.claudeEnabled {
+                        Text(store.localPath(for: r).map { ($0 as NSString).abbreviatingWithTildeInPath }
+                             ?? "No local folder")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                        }
+                    }
                     Spacer()
+                    if store.claudeEnabled {
+                        Button("Folder…") { chooseFolder(for: r) }
+                            .help("Local checkout Claude Code works in when you resolve review comments")
+                    }
                     Button("Remove") { store.removeRepo(r) }
                 }
+                .listRowBackground(isFolderNeeded(r) ? Color.orange.opacity(0.15) : nil)
+            }
+        } header: {
+            Text("Repositories (owner/name)")
+        } footer: {
+            if store.claudeEnabled {
+                Text("The folder is your local checkout of the repo. The Resolve button on Opened by me starts Claude Code there to work through the PR's unresolved review comments.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -114,6 +153,60 @@ struct SettingsView: View {
                     catch { message = error.localizedDescription }
                 }
             }
+        }
+        Section {
+            HStack {
+                Toggle("Resolve review comments with Claude Code", isOn: claudeToggle)
+                    .disabled(checkingClaude)
+                if checkingClaude { ProgressView().controlSize(.small) }
+            }
+            if !claudeStatus.isEmpty {
+                Text(claudeStatus).font(.caption).foregroundStyle(claudeFailed ? .red : .secondary)
+            }
+        } header: {
+            Text("Claude Code")
+        } footer: {
+            Text("Adds a Resolve button to Opened by me. It opens Terminal with Claude Code in your local checkout to fix, reply to and resolve the PR's unresolved review threads. Turning it on first checks that `claude` is installed and runs.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    /// Turning on runs `claude --version` first and only enables the feature if that works.
+    private var claudeToggle: Binding<Bool> {
+        Binding(get: { store.claudeEnabled }, set: { on in
+            guard on else {
+                store.claudeEnabled = false
+                claudeStatus = ""
+                return
+            }
+            checkingClaude = true
+            claudeStatus = "Checking Claude Code…"
+            claudeFailed = false
+            Task {
+                let result = await Task.detached { Result { try ClaudeResolve.checkCLI() } }.value
+                checkingClaude = false
+                switch result {
+                case .success(let found):
+                    store.claudeEnabled = true
+                    claudeStatus = "Found Claude Code \(found)"
+                case .failure(let error):
+                    claudeFailed = true
+                    claudeStatus = error.localizedDescription
+                }
+            }
+        })
+    }
+
+    private func isFolderNeeded(_ repo: String) -> Bool {
+        store.claudeEnabled && folderNeeded?.caseInsensitiveCompare(repo) == .orderedSame && store.localPath(for: repo) == nil
+    }
+
+    private func chooseFolder(for repo: String) {
+        ClaudeLauncher.chooseFolder(for: repo) { path in
+            ClaudeLauncher.reopenPanel()
+            guard let path else { return }
+            if ClaudeLauncher.isGitCheckout(path) { store.setLocalPath(path, for: repo); message = "" }
+            else { message = "\(path) is not a git checkout" }
         }
     }
 

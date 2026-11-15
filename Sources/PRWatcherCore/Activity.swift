@@ -145,11 +145,17 @@ public struct PullRequest: Codable, Hashable, Identifiable {
     public let events: [ActivityEvent]
     public let status: PRStatus
     public let review: ReviewSummary
+    /// Unresolved review threads started by someone other than the viewer (Copilot included).
+    public let unresolvedThreads: [ReviewThread]
+    public let headRef: String?     // the PR's branch name
 
     public init(repo: String, number: Int, title: String, url: URL, events: [ActivityEvent],
-                status: PRStatus = .open, review: ReviewSummary = ReviewSummary()) {
+                status: PRStatus = .open, review: ReviewSummary = ReviewSummary(),
+                unresolvedThreads: [ReviewThread] = [], headRef: String? = nil) {
+        self.headRef = headRef
         self.status = status
         self.review = review
+        self.unresolvedThreads = unresolvedThreads
         self.key = "\(repo)#\(number)"
         self.repo = repo
         self.number = number
@@ -157,6 +163,27 @@ public struct PullRequest: Codable, Hashable, Identifiable {
         self.url = url
         self.events = events
     }
+}
+
+/// An unresolved inline review thread, as handed to Claude when resolving a PR's review comments.
+public struct ReviewThread: Codable, Hashable, Identifiable {
+    public let id: String          // GraphQL node id (PRRT_…), needed to reply to and resolve the thread
+    public let author: String
+    public let path: String?
+    public let line: Int?
+    public let url: URL?           // the thread's first comment
+    public let body: String        // first comment, trimmed
+
+    public init(id: String, author: String, path: String? = nil, line: Int? = nil, url: URL? = nil, body: String = "") {
+        self.id = id
+        self.author = author
+        self.path = path
+        self.line = line
+        self.url = url
+        self.body = body
+    }
+
+    public var isCopilot: Bool { ReviewSummary.isCopilot(author) }
 }
 
 public struct FetchResult {

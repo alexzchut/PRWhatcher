@@ -41,13 +41,13 @@ public final class GitHubClient: PRFetching {
 
     static let fragment = """
     fragment PRFields on PullRequest {
-          number title url reviewDecision state isDraft
+          number title url reviewDecision state isDraft headRefName
           repository { nameWithOwner }
           comments(last: 30) { nodes { id url bodyText createdAt author { login } } }
           reviews(last: 30) { nodes { id url state bodyText createdAt author { login } } }
           reviewThreads(last: 50) { nodes {
-            isResolved
-            root: comments(first: 1) { nodes { id author { login } } }
+            id isResolved path line
+            root: comments(first: 1) { nodes { id url bodyText author { login } } }
             comments(last: 10) { nodes { id url bodyText createdAt author { login } } }
           } }
           commits(last: 30) { nodes { commit {
@@ -243,7 +243,10 @@ public final class GitHubClient: PRFetching {
         let author: Login?
     }
     private struct ThreadNode: Decodable {
+        let id: String?
         let isResolved: Bool?
+        let path: String?
+        let line: Int?
         let root: Nodes<CommentNode>?
         let comments: Nodes<CommentNode>?
     }
@@ -265,6 +268,7 @@ public final class GitHubClient: PRFetching {
         let reviewDecision: String?
         let state: String?
         let isDraft: Bool?
+        let headRefName: String?
         let repository: Repo?
         let comments: Nodes<CommentNode>?
         let reviews: Nodes<CommentNode>?
@@ -278,8 +282,6 @@ public final class GitHubClient: PRFetching {
             var events: [ActivityEvent] = []
 
             func add(_ c: CommentNode, kind: ActivityKind, summary: String) {
-                // Copilot feedback is shown in the Review column, not as activity.
-                if ReviewSummary.isCopilot(c.author?.login) { return }
                 // Copilot feedback is shown in the Review column, not as activity.
                 if ReviewSummary.isCopilot(c.author?.login) { return }
                 events.append(ActivityEvent(
@@ -324,7 +326,21 @@ public final class GitHubClient: PRFetching {
             }
             return PullRequest(repo: repo, number: number, title: title, url: prURL, events: events,
                                status: PRStatus(reviewDecision: reviewDecision, state: state, isDraft: isDraft ?? false),
-                               review: reviewSummary(viewer: viewer))
+                               review: reviewSummary(viewer: viewer),
+                               unresolvedThreads: openThreads(viewer: viewer), headRef: headRefName)
+        }
+
+        /// Unresolved threads someone else started; the viewer's own threads are notes, not feedback to address.
+        private func openThreads(viewer: String) -> [ReviewThread] {
+            (reviewThreads?.nodes?.compactMap { $0 } ?? []).compactMap { t in
+                guard t.isResolved == false, let id = t.id else { return nil }
+                let root = t.root?.nodes?.compactMap { $0 }.first
+                let author = root?.author?.login ?? "ghost"
+                if author.caseInsensitiveCompare(viewer) == .orderedSame { return nil }
+                return ReviewThread(id: id, author: author, path: t.path, line: t.line,
+                                    url: root?.url.flatMap(URL.init(string:)),
+                                    body: reviewBody(root?.bodyText).map { $0.count > 400 ? String($0.prefix(400)) + "…" : $0 } ?? "")
+            }
         }
 
         private func reviewSummary(viewer: String) -> ReviewSummary {
