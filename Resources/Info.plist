@@ -11,5 +11,6 @@
     <key>CFBundleVersion</key><string>1</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
+    <key>NSAppleEventsUsageDescription</key><string>PRWatcher opens a new iTerm2 window to run Claude Code on a pull request's review comments.</string>
 </dict>
 </plist>

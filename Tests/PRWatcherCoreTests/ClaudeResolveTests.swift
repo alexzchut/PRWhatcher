@@ -146,4 +146,26 @@ final class ClaudeResolveTests: XCTestCase {
     func testLaunchScriptUsesSamePathAsCheck() {
         XCTAssertTrue(ClaudeResolve.launchScript(directory: "/x", prompt: "p").contains(ClaudeResolve.pathExport))
     }
+
+    func testITermScriptQuotesThePath() {
+        let src = ClaudeResolve.iTermAppleScript(running: #"/tmp/a b/it's "x".command"#)
+        XCTAssertTrue(src.contains(#"application id "com.googlecode.iterm2""#))
+        XCTAssertTrue(src.contains("create window with default profile"))
+        // shell-quoted, then escaped for an AppleScript string literal
+        XCTAssertTrue(src.contains(#"write text "'/tmp/a b/it'\\''s \"x\".command'""#), src)
+    }
+
+    /// The generated AppleScript must at least compile (osacompile doesn't need iTerm2 to run).
+    func testITermScriptCompiles() throws {
+        // Compiling needs iTerm2's scripting dictionary.
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: "/Applications/iTerm.app"), "iTerm2 not installed")
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".scpt")
+        defer { try? FileManager.default.removeItem(at: out) }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/osacompile")
+        p.arguments = ["-o", out.path, "-e", ClaudeResolve.iTermAppleScript(running: "/tmp/x.command")]
+        try p.run()
+        p.waitUntilExit()
+        XCTAssertEqual(p.terminationStatus, 0)
+    }
 }

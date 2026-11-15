@@ -52,6 +52,28 @@ public enum ClaudeResolve {
         """
     }
 
+    public static let iTermBundleID = "com.googlecode.iterm2"
+
+    /// AppleScript that runs `script` in a new iTerm2 window, typed into the user's shell so the window stays
+    /// open after Claude exits. If iTerm2 wasn't running, the window it opens on launch is reused.
+    public static func iTermAppleScript(running script: String) -> String {
+        let command = shellQuote(script)
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return """
+        set wasRunning to application id "\(iTermBundleID)" is running
+        tell application id "\(iTermBundleID)"
+            activate
+            if wasRunning or (count of windows) = 0 then
+                set w to (create window with default profile)
+            else
+                set w to current window
+            end if
+            tell current session of w to write text "\(command)"
+        end tell
+        """
+    }
+
     /// Where Claude Code's installers put `claude`; prepended to the login shell's PATH, since an app launched
     /// from Finder or at login doesn't inherit the PATH from the user's shell config.
     static let searchPath = "$HOME/.local/bin:$HOME/.claude/local:/opt/homebrew/bin:/usr/local/bin:$PATH"

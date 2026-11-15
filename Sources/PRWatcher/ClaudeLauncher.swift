@@ -68,6 +68,7 @@ enum ClaudeLauncher {
         FileManager.default.fileExists(atPath: (path as NSString).appendingPathComponent(".git"))
     }
 
+    /// Writes the launch script and runs it in iTerm2 when installed, otherwise in Terminal.
     private static func open(directory: String, prompt: String) -> String? {
         let script = FileManager.default.temporaryDirectory
             .appendingPathComponent("prwatcher-resolve-\(UUID().uuidString).command")
@@ -78,6 +79,30 @@ enum ClaudeLauncher {
         } catch {
             return "Couldn't write the launch script: \(error.localizedDescription)"
         }
+        if NSWorkspace.shared.urlForApplication(withBundleIdentifier: ClaudeResolve.iTermBundleID) != nil {
+            openInITerm(script)
+            return nil
+        }
+        return openInTerminal(script)
+    }
+
+    /// Runs off the main thread: launching iTerm2 and the one-time automation permission prompt can take a while.
+    /// Falls back to Terminal if iTerm2 can't be driven (for example, automation permission was denied).
+    private static func openInITerm(_ script: URL) {
+        let source = ClaudeResolve.iTermAppleScript(running: script.path)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            p.arguments = ["-e", source]
+            p.standardOutput = FileHandle.nullDevice
+            p.standardError = FileHandle.nullDevice
+            let ok = (try? p.run()) != nil && { p.waitUntilExit(); return p.terminationStatus == 0 }()
+            if !ok { DispatchQueue.main.async { _ = openInTerminal(script) } }
+        }
+    }
+
+    @discardableResult
+    private static func openInTerminal(_ script: URL) -> String? {
         guard let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") else {
             return "Terminal.app not found"
         }
