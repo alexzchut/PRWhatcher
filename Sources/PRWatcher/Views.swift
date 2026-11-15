@@ -28,6 +28,7 @@ struct ContentView: View {
 
     @State private var newPR = ""
     @State private var addMessage = ""
+    @State private var resolveMessage = ""
 
     enum Tab: String { case all, assigned, custom }
 
@@ -41,7 +42,7 @@ struct ContentView: View {
         }
         .frame(width: 882)
         .onAppear(perform: panelOpened)
-        .onDisappear { highlighted = []; showSettings = false }
+        .onDisappear { highlighted = []; showSettings = false; resolveMessage = "" }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in panelOpened() }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in highlighted = [] }
     }
@@ -73,7 +74,7 @@ struct ContentView: View {
                     }
                     .frame(width: Col.review)
                     // Spans the row's trash column: 50 pt button + 6 pt gap, minus this stack's 8 pt spacing.
-                    if tab == .custom { Text("Actions").frame(width: 48, alignment: .center) }
+                    if tab != .assigned { Text("Actions").frame(width: 48, alignment: .center) }
                 }
             }
             .font(.caption.weight(.semibold))
@@ -112,7 +113,8 @@ struct ContentView: View {
                             VStack(alignment: .leading, spacing: 10) {
                                 ForEach(group.prs) { pr in
                                     PRRow(pr: pr, store: store, isUnread: isUnread(pr),
-                                          onRemove: tab == .custom ? { remove(pr.key) } : nil)
+                                          onRemove: tab == .custom ? { remove(pr.key) } : nil,
+                                          onResolve: tab == .all ? { resolve(pr) } : nil)
                                 }
                             }
                         }
@@ -124,7 +126,8 @@ struct ContentView: View {
             .frame(minHeight: 300, idealHeight: 570, maxHeight: 630)
             Divider()
             HStack {
-                if store.isRefreshing { ProgressView().controlSize(.small) }
+                if !resolveMessage.isEmpty { Text(resolveMessage).foregroundStyle(.red).lineLimit(1) }
+                else if store.isRefreshing { ProgressView().controlSize(.small) }
                 else if !store.status.isEmpty { Text(store.status).foregroundStyle(.red).lineLimit(1) }
                 else if let t = store.lastChecked { Text("Checked \(t, style: .relative) ago").foregroundStyle(.secondary) }
                 Spacer()
@@ -178,6 +181,10 @@ struct ContentView: View {
         }
     }
 
+    private func resolve(_ pr: PullRequest) {
+        resolveMessage = ClaudeLauncher.resolve(pr, store: store) ?? ""
+    }
+
     private func remove(_ key: String) {
         if let ref = store.customRefs.first(where: { $0.key == key }) { store.removeCustomPR(ref) }
     }
@@ -201,10 +208,21 @@ struct PRRow: View {
     @ObservedObject var store: Store
     let isUnread: Bool
     var onRemove: (() -> Void)? = nil
+    var onResolve: (() -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .titleLine, spacing: 6) {
             main
+            if let onResolve {
+                let count = pr.unresolvedThreads.count
+                Button(action: onResolve) { Image(systemName: "wand.and.stars") }
+                    .buttonStyle(.borderless)
+                    .frame(width: 50)
+                    .disabled(count == 0)
+                    .help(count == 0 ? "No unresolved review threads"
+                          : "Resolve \(count) review thread\(count == 1 ? "" : "s") with Claude Code in your local checkout")
+                    .alignmentGuide(.titleLine) { d in d[VerticalAlignment.center] }
+            }
             if let onRemove {
                 Button(action: onRemove) { Image(systemName: "trash") }
                     .buttonStyle(.borderless)

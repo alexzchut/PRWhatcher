@@ -26,6 +26,10 @@ public final class Store: ObservableObject {
     @Published public private(set) var customRefs: [PRRef] {
         didSet { defaults.set(try? JSONEncoder().encode(customRefs), forKey: Keys.custom) }
     }
+    /// Local checkout folder per repo (keys lowercased), used when handing review comments to Claude Code.
+    @Published public private(set) var localPaths: [String: String] {
+        didSet { defaults.set(localPaths, forKey: Keys.localPaths) }
+    }
     @Published public private(set) var state = TrackerState()
     @Published public private(set) var status = ""
     @Published public private(set) var lastChecked: Date?
@@ -36,7 +40,8 @@ public final class Store: ObservableObject {
     /// Unresolved Copilot threads per PR at the previous fetch; a PR not in here is baselined without alerting.
     private var lastCopilotCounts: [String: Int] = [:]
 
-    private enum Keys { static let repos = "repos", interval = "intervalMinutes", custom = "customPRs", statuses = "statuses" }
+    private enum Keys { static let repos = "repos", interval = "intervalMinutes", custom = "customPRs", statuses = "statuses",
+                              localPaths = "localPaths" }
 
     private let fetcher: PRFetching
     private let notifier: Notifying
@@ -69,6 +74,7 @@ public final class Store: ObservableObject {
         self.repos = defaults.stringArray(forKey: Keys.repos) ?? []
         self.customRefs = defaults.data(forKey: Keys.custom)
             .flatMap { try? JSONDecoder().decode([PRRef].self, from: $0) } ?? []
+        self.localPaths = defaults.dictionary(forKey: Keys.localPaths) as? [String: String] ?? [:]
         self.statuses = defaults.data(forKey: Keys.statuses)
             .flatMap { try? JSONDecoder().decode(StatusFilter.self, from: $0) } ?? StatusFilter()
         let saved = defaults.integer(forKey: Keys.interval)
@@ -119,6 +125,13 @@ public final class Store: ObservableObject {
     }
 
     public func removeRepo(_ r: String) { repos.removeAll { $0 == r } }
+
+    public func localPath(for repo: String) -> String? { localPaths[repo.lowercased()] }
+
+    /// Pass nil to forget the folder.
+    public func setLocalPath(_ path: String?, for repo: String) {
+        localPaths[repo.lowercased()] = path
+    }
 
     public func startPolling() {
         pollTask?.cancel()

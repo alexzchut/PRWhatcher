@@ -55,7 +55,7 @@ struct SettingsView: View {
 
     // Plain rows, not a List: a List nested in a Form doesn't scroll, so a fixed height would clip it.
     @ViewBuilder private var repositories: some View {
-        Section("Repositories (owner/name)") {
+        Section {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Repository URL or owner/name").font(.caption).foregroundStyle(.secondary)
                 HStack {
@@ -67,11 +67,24 @@ struct SettingsView: View {
             }
             ForEach(store.repos, id: \.self) { r in
                 HStack {
-                    Text(r)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(r)
+                        Text(store.localPath(for: r).map { ($0 as NSString).abbreviatingWithTildeInPath }
+                             ?? "No local folder")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                    }
                     Spacer()
+                    Button("Folder…") { chooseFolder(for: r) }
+                        .help("Local checkout Claude Code works in when you resolve review comments")
                     Button("Remove") { store.removeRepo(r) }
                 }
             }
+        } header: {
+            Text("Repositories (owner/name)")
+        } footer: {
+            Text("The folder is your local checkout of the repo. The Resolve button on Opened by me starts Claude Code there to work through the PR's unresolved review comments.")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -115,6 +128,12 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    private func chooseFolder(for repo: String) {
+        guard let path = ClaudeLauncher.chooseFolder(for: repo) else { return }
+        if ClaudeLauncher.isGitCheckout(path) { store.setLocalPath(path, for: repo); message = "" }
+        else { message = "\(path) is not a git checkout" }
     }
 
     private func add() {
