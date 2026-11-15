@@ -44,12 +44,64 @@ public enum ClaudeResolve {
         """
         #!/bin/zsh -l
         rm -f "$0"
-        export PATH="$HOME/.local/bin:$HOME/.claude/local:/opt/homebrew/bin:/usr/local/bin:$PATH"
+        \(pathExport)
         cd \(shellQuote(directory)) || { echo "Folder not found: "\(shellQuote(directory)); exit 1; }
         if ! command -v claude >/dev/null; then echo "Claude Code (claude) is not installed or not on PATH"; exit 1; fi
         claude \(shellQuote(prompt))
 
         """
+    }
+
+    /// Where Claude Code's installers put `claude`; prepended to the login shell's PATH, since an app launched
+    /// from Finder or at login doesn't inherit the PATH from the user's shell config.
+    static let searchPath = "$HOME/.local/bin:$HOME/.claude/local:/opt/homebrew/bin:/usr/local/bin:$PATH"
+    static var pathExport: String { "export PATH=\"\(searchPath)\"" }
+
+    public enum CheckError: LocalizedError {
+        case notFound
+        case failed(String)
+        public var errorDescription: String? {
+            switch self {
+            case .notFound: return "Claude Code (claude) isn't installed or isn't on your PATH. Install it from claude.com/claude-code."
+            case .failed(let m): return "`claude --version` failed: \(m)"
+            }
+        }
+    }
+
+    /// Finds `claude` the same way the Terminal script does and runs `claude --version`, so enabling the
+    /// feature fails early instead of on the first Resolve. Returns "<version> at <path>". No model call is made.
+    public static func checkCLI() throws -> String { try checkCLI(pathExport: pathExport) }
+
+    /// `pathExport` is replaceable so tests can point it at a stub.
+    static func checkCLI(pathExport: String) throws -> String {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        p.arguments = ["-l", "-c", """
+            \(pathExport)
+            bin=$(command -v claude) || exit 127
+            ver=$("$bin" --version) || exit $?
+            echo "PRW_BIN=$bin"
+            echo "PRW_VER=$ver"
+            """]
+        let out = Pipe(), err = Pipe()
+        p.standardOutput = out
+        p.standardError = err
+        p.standardInput = FileHandle.nullDevice
+        try p.run()
+        p.waitUntilExit()
+        let o = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let e = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        // A login shell's profile may print its own output; only the tagged lines count.
+        func value(_ tag: String) -> String? {
+            o.split(whereSeparator: \.isNewline).last { $0.hasPrefix(tag) }
+                .map { $0.dropFirst(tag.count).trimmingCharacters(in: .whitespaces) }
+        }
+        if p.terminationStatus == 127 { throw CheckError.notFound }
+        guard p.terminationStatus == 0, let bin = value("PRW_BIN="), let ver = value("PRW_VER=") else {
+            let msg = e.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw CheckError.failed(msg.isEmpty ? "exit code \(p.terminationStatus)" : msg)
+        }
+        return "\(ver) at \((bin as NSString).abbreviatingWithTildeInPath)"
     }
 
     /// Single-quotes `s` for zsh; embedded single quotes become `'\\''`.

@@ -100,4 +100,50 @@ final class ClaudeResolveTests: XCTestCase {
         XCTAssertTrue(output.contains("my repo"))
         XCTAssertFalse(FileManager.default.fileExists(atPath: script.path), "script removes itself")
     }
+
+    // MARK: - CLI check (stubs only; a real `claude` is never on the test PATH)
+
+    private func stubDir(claude script: String?) throws -> URL {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if let script {
+            let stub = dir.appendingPathComponent("claude")
+            try ("#!/bin/sh\n" + script).write(to: stub, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stub.path)
+        }
+        return dir
+    }
+
+    private func check(_ dir: URL) throws -> String {
+        try ClaudeResolve.checkCLI(pathExport: "export PATH=\"\(dir.path):/usr/bin:/bin\"")
+    }
+
+    func testCheckReportsVersionAndPath() throws {
+        let dir = try stubDir(claude: "echo '2.1.325 (Claude Code)'\n")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let found = try check(dir)
+        XCTAssertTrue(found.hasPrefix("2.1.325 (Claude Code) at "), found)
+        XCTAssertTrue(found.hasSuffix("/claude"), found)
+    }
+
+    func testCheckFailsWhenNotInstalled() throws {
+        let dir = try stubDir(claude: nil)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        XCTAssertThrowsError(try check(dir)) { error in
+            guard case ClaudeResolve.CheckError.notFound = error else { return XCTFail("\(error)") }
+        }
+    }
+
+    func testCheckFailsWhenClaudeErrors() throws {
+        let dir = try stubDir(claude: "echo 'broken install' >&2\nexit 3\n")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        XCTAssertThrowsError(try check(dir)) { error in
+            guard case ClaudeResolve.CheckError.failed(let m) = error else { return XCTFail("\(error)") }
+            XCTAssertEqual(m, "broken install")
+        }
+    }
+
+    func testLaunchScriptUsesSamePathAsCheck() {
+        XCTAssertTrue(ClaudeResolve.launchScript(directory: "/x", prompt: "p").contains(ClaudeResolve.pathExport))
+    }
 }

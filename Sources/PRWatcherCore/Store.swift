@@ -30,6 +30,8 @@ public final class Store: ObservableObject {
     @Published public private(set) var localPaths: [String: String] {
         didSet { defaults.set(localPaths, forKey: Keys.localPaths) }
     }
+    /// Shows the Resolve-with-Claude button on Opened by me. Settings verifies the CLI before turning it on.
+    @Published public var claudeEnabled: Bool { didSet { defaults.set(claudeEnabled, forKey: Keys.claudeEnabled) } }
     @Published public private(set) var state = TrackerState()
     @Published public private(set) var status = ""
     @Published public private(set) var lastChecked: Date?
@@ -41,7 +43,7 @@ public final class Store: ObservableObject {
     private var lastCopilotCounts: [String: Int] = [:]
 
     private enum Keys { static let repos = "repos", interval = "intervalMinutes", custom = "customPRs", statuses = "statuses",
-                              localPaths = "localPaths" }
+                              localPaths = "localPaths", claudeEnabled = "claudeEnabled" }
 
     private let fetcher: PRFetching
     private let notifier: Notifying
@@ -74,6 +76,7 @@ public final class Store: ObservableObject {
         self.repos = defaults.stringArray(forKey: Keys.repos) ?? []
         self.customRefs = defaults.data(forKey: Keys.custom)
             .flatMap { try? JSONDecoder().decode([PRRef].self, from: $0) } ?? []
+        self.claudeEnabled = defaults.bool(forKey: Keys.claudeEnabled)
         self.localPaths = defaults.dictionary(forKey: Keys.localPaths) as? [String: String] ?? [:]
         self.statuses = defaults.data(forKey: Keys.statuses)
             .flatMap { try? JSONDecoder().decode(StatusFilter.self, from: $0) } ?? StatusFilter()

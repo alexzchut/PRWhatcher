@@ -42,7 +42,12 @@ struct ContentView: View {
         }
         .frame(width: 882)
         .onAppear(perform: panelOpened)
-        .onDisappear { highlighted = []; showSettings = false; resolveMessage = "" }
+        .onDisappear {
+            highlighted = []
+            resolveMessage = ""
+            // The folder picker closes the panel and reopens it afterwards; stay on Settings for that.
+            if !ClaudeLauncher.isPicking { showSettings = false }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in panelOpened() }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in highlighted = [] }
     }
@@ -74,7 +79,7 @@ struct ContentView: View {
                     }
                     .frame(width: Col.review)
                     // Spans the row's trash column: 50 pt button + 6 pt gap, minus this stack's 8 pt spacing.
-                    if tab != .assigned { Text("Actions").frame(width: 48, alignment: .center) }
+                    if showsActions { Text("Actions").frame(width: 48, alignment: .center) }
                 }
             }
             .font(.caption.weight(.semibold))
@@ -114,7 +119,7 @@ struct ContentView: View {
                                 ForEach(group.prs) { pr in
                                     PRRow(pr: pr, store: store, isUnread: isUnread(pr),
                                           onRemove: tab == .custom ? { remove(pr.key) } : nil,
-                                          onResolve: tab == .all ? { resolve(pr) } : nil)
+                                          onResolve: tab == .all && store.claudeEnabled ? { resolve(pr) } : nil)
                                 }
                             }
                         }
@@ -181,8 +186,10 @@ struct ContentView: View {
         }
     }
 
+    private var showsActions: Bool { tab == .custom || (tab == .all && store.claudeEnabled) }
+
     private func resolve(_ pr: PullRequest) {
-        resolveMessage = ClaudeLauncher.resolve(pr, store: store) ?? ""
+        ClaudeLauncher.resolve(pr, store: store) { resolveMessage = $0 ?? "" }
     }
 
     private func remove(_ key: String) {
