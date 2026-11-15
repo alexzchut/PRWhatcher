@@ -31,6 +31,9 @@ enum ClaudeLauncher {
         panel.allowsMultipleSelection = false
         panel.prompt = "Choose"
         panel.message = "Choose your local checkout of \(repo)"
+        // The menu bar panel floats above normal windows; without this the picker opens behind it.
+        let hostLevel = (NSApp.keyWindow ?? NSApp.windows.first { $0.isVisible })?.level.rawValue ?? 0
+        panel.level = NSWindow.Level(rawValue: max(hostLevel, NSWindow.Level.modalPanel.rawValue) + 1)
         NSApp.activate(ignoringOtherApps: true)
         return panel.runModal() == .OK ? panel.url?.path : nil
     }
