@@ -73,6 +73,13 @@ final class ClaudeResolveTests: XCTestCase {
         XCTAssertTrue(p.contains("2. Copilot (Copilot)"))
         XCTAssertTrue(p.contains("git worktree made for this: /c/r-pr-7, on branch `pr-7-review-fixes`"))
         XCTAssertTrue(p.contains("Don't touch my main checkout at /c/r"))
+        XCTAssertTrue(p.contains("dependencies are already installed"))
+        let simplify = p.range(of: "run the `/simplify` skill"), verify = p.range(of: "then the `/verify` skill")
+        let commit = p.range(of: "Then commit on `pr-7-review-fixes`")
+        XCTAssertNotNil(simplify); XCTAssertNotNil(verify); XCTAssertNotNil(commit)
+        if let simplify, let verify, let commit {
+            XCTAssertTrue(simplify.lowerBound < verify.lowerBound && verify.lowerBound < commit.lowerBound, "simplify, verify, then commit")
+        }
         XCTAssertTrue(p.contains("git push origin HEAD:feat/x"))
         XCTAssertTrue(p.contains("Never force-push"))
         XCTAssertFalse(p.contains("gh pr checkout"))
@@ -115,11 +122,21 @@ final class ClaudeResolveTests: XCTestCase {
         defer { try? fm.removeItem(at: tmp) }
 
         try git("init", "-q", in: origin)
-        try git("commit", "-q", "--allow-empty", "-m", "base", in: origin)
+        try "node_modules\n.env\n".write(to: origin.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        try git("add", ".gitignore", in: origin)
+        try git("commit", "-q", "-m", "base", in: origin)
         try git("checkout", "-q", "-b", "feat/x", in: origin)
         try git("commit", "-q", "--allow-empty", "-m", "pr work", in: origin)
         try git("checkout", "-q", "main", in: origin)
         try git("clone", "-q", origin.path, checkout.path, in: tmp)
+
+        // Ignored files in the user's checkout, including a nested node_modules in a folder with a space.
+        let ignored = ["node_modules/left-pad/index.js", "packages/a b/node_modules/x/i.js", ".env"]
+        for f in ignored {
+            let u = checkout.appendingPathComponent(f)
+            try fm.createDirectory(at: u.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try f.write(to: u, atomically: true, encoding: .utf8)
+        }
 
         let out = tmp.appendingPathComponent("out.txt")
         let stub = bin.appendingPathComponent("claude")
@@ -154,6 +171,10 @@ final class ClaudeResolveTests: XCTestCase {
             XCTAssertEqual(o[1], "pr-7-review-fixes")
             XCTAssertEqual(o[2], "pr work")
             XCTAssertEqual(o.dropFirst(3).joined(separator: "\n"), prompt)
+        }
+        let worktree = URL(fileURLWithPath: ws.worktree)
+        for f in ignored {
+            XCTAssertEqual(try? String(contentsOf: worktree.appendingPathComponent(f), encoding: .utf8), f, "copied \(f)")
         }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/git")

@@ -25,7 +25,7 @@ public enum ClaudeResolve {
         var lines = [
             "Resolve the open review comments on \(pr.url.absoluteString) (\(pr.repo) #\(pr.number): \"\(pr.title)\").",
             "",
-            "You are in a git worktree made for this: \(ws.worktree), on branch `\(ws.branch)`, started from `origin/\(ws.base)` (the PR's branch). Do all the work here. Don't touch my main checkout at \(ws.checkout).",
+            "You are in a git worktree made for this: \(ws.worktree), on branch `\(ws.branch)`, started from `origin/\(ws.base)` (the PR's branch). Do all the work here. Don't touch my main checkout at \(ws.checkout). Git-ignored files (node_modules, .env, build caches) were copied from my checkout when the worktree was created, so dependencies are already installed; reinstall only if the PR changes the dependency manifests or lockfile compared to my checkout.",
             "",
             "Unresolved review threads (\(pr.unresolvedThreads.count)):",
         ]
@@ -47,7 +47,7 @@ public enum ClaudeResolve {
             "2. For each thread, read the whole conversation and the code it points to. The comment text above is only the start of the thread. To read a thread in full:",
             "   gh api graphql -f query='query($id:ID!){node(id:$id){... on PullRequestReviewThread{path line isResolved comments(first:50){nodes{author{login} body url}}}}}' -f id=<thread id>",
             "3. Decide for each thread whether the code should change. Make the changes that are warranted; don't change code just to satisfy a comment you think is wrong.",
-            "4. Run the project's build and tests if it has them, then commit on `\(ws.branch)` with a clear message.",
+            "4. Before committing, run the `/simplify` skill on your changes, then the `/verify` skill, and fix what they find. If either skill isn't available, say so and do the equivalent yourself (simplify: review your diff for reuse and needless complexity; verify: run the project's build and tests and check the change works). Then commit on `\(ws.branch)` with a clear message.",
             "5. Push the fixes to the PR: `git push origin HEAD:\(ws.base)`. Never force-push. If the push is rejected because the PR branch moved, run `git fetch origin \(ws.base) && git rebase origin/\(ws.base)`, re-run the tests and push again.",
             "6. Reply on every thread: what you changed (with the commit SHA), or why you left the code as it is.",
             "   gh api graphql -f query='mutation($id:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$id,body:$body}){comment{url}}}' -f id=<thread id> -f body=<reply>",
@@ -76,6 +76,15 @@ public enum ClaudeResolve {
         else
           git worktree prune
           git worktree add -B \(branch) \(worktree) \(remoteBase) || { echo "Couldn't create the worktree "\(worktree); exit 1; }
+          # A worktree has only tracked files. Copy what git ignores (node_modules, .env, build caches) from the
+          # checkout so nothing has to be reinstalled; APFS clones (cp -c) make this fast and take no extra space.
+          echo "Copying dependencies and other ignored files from "\(checkout)
+          git ls-files -z --others --ignored --exclude-standard --directory | while IFS= read -r -d "" p; do
+            p=${p%/}
+            [ -e \(worktree)/"$p" ] && continue
+            mkdir -p \(worktree)/"$(dirname "$p")"
+            cp -cR "$p" \(worktree)/"$p" 2>/dev/null || cp -R "$p" \(worktree)/"$p"
+          done
         fi
         cd \(worktree) || exit 1
         claude \(shellQuote(prompt))
