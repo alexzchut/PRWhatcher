@@ -75,11 +75,14 @@ final class ClaudeResolveTests: XCTestCase {
         XCTAssertTrue(p.contains("Don't touch my main checkout at /c/r"))
         XCTAssertTrue(p.contains("dependencies are already installed"))
         let simplify = p.range(of: "run the `/simplify` skill"), verify = p.range(of: "then the `/verify` skill")
+        let lint = p.range(of: "run `yarn lint`")
         let commit = p.range(of: "Then commit on `claude/feat/x`")
-        XCTAssertNotNil(simplify); XCTAssertNotNil(verify); XCTAssertNotNil(commit)
-        if let simplify, let verify, let commit {
-            XCTAssertTrue(simplify.lowerBound < verify.lowerBound && verify.lowerBound < commit.lowerBound, "simplify, verify, then commit")
+        XCTAssertNotNil(simplify); XCTAssertNotNil(verify); XCTAssertNotNil(lint); XCTAssertNotNil(commit)
+        if let simplify, let verify, let lint, let commit {
+            XCTAssertTrue(simplify.lowerBound < verify.lowerBound && verify.lowerBound < lint.lowerBound
+                          && lint.lowerBound < commit.lowerBound, "simplify, verify, lint, then commit")
         }
+        XCTAssertTrue(p.contains("(.js, .jsx, .ts, .tsx, .mjs, .cjs)"))
         XCTAssertTrue(p.contains("git push origin HEAD:feat/x"))
         XCTAssertTrue(p.contains("Never force-push"))
         XCTAssertFalse(p.contains("gh pr checkout"))
