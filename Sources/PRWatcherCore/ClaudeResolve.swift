@@ -5,7 +5,7 @@ import Foundation
 public struct ResolveWorkspace: Equatable {
     public let checkout: String     // the user's local clone
     public let worktree: String     // sibling folder, e.g. ~/code/zapp-pr-5092
-    public let branch: String       // e.g. pr-5092-review-fixes
+    public let branch: String       // claude/<PR branch>, e.g. claude/feat/login
     public let base: String         // the PR's head branch; fixes are pushed back to it
 
     public init(checkout: String, prNumber: Int, base: String) {
@@ -13,7 +13,7 @@ public struct ResolveWorkspace: Equatable {
         self.checkout = url.path
         self.worktree = url.deletingLastPathComponent()
             .appendingPathComponent("\(url.lastPathComponent)-pr-\(prNumber)").path
-        self.branch = "pr-\(prNumber)-review-fixes"
+        self.branch = "claude/\(base)"
         self.base = base
     }
 }
@@ -53,13 +53,14 @@ public enum ClaudeResolve {
             "   gh api graphql -f query='mutation($id:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$id,body:$body}){comment{url}}}' -f id=<thread id> -f body=<reply>",
             "7. Resolve each thread you fixed or answered conclusively. Leave a thread unresolved when it needs my decision, and say so in the reply.",
             "   gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -f id=<thread id>",
-            "8. Finish with a short table: each thread, what you did (fixed / no change / needs my input), and whether it is resolved. Leave the worktree in place for me to review; it can be removed later with `git worktree remove \(ws.worktree)`.",
+            "8. Finish with a short table: each thread, what you did (fixed / no change / needs my input), and whether it is resolved. When this session ends, the worktree and the `\(ws.branch)` branch are removed automatically if everything is committed and pushed (otherwise they're kept), so don't remove them yourself.",
         ]
         return lines.joined(separator: "\n")
     }
 
-    /// A `.command` script that the terminal runs: creates (or reuses) the PR's worktree on its fix branch and
-    /// starts an interactive Claude Code session there. The script deletes itself once started, so the prompt
+    /// A `.command` script that the terminal runs: creates (or reuses) the PR's worktree on its fix branch,
+    /// starts an interactive Claude Code session there, and removes the worktree and branch once the session
+    /// ends with everything committed and pushed. The script deletes itself once started, so the prompt
     /// doesn't linger in the temp folder.
     public static func launchScript(_ ws: ResolveWorkspace, prompt: String) -> String {
         let checkout = shellQuote(ws.checkout), worktree = shellQuote(ws.worktree)
@@ -88,6 +89,21 @@ public enum ClaudeResolve {
         fi
         cd \(worktree) || exit 1
         claude \(shellQuote(prompt))
+
+        # Session over: remove the worktree and its branch, unless that would lose work. Any failed check counts
+        # as "keep".
+        cd \(checkout) || exit 0
+        git fetch -q origin \(base) 2>/dev/null
+        dirty=$(git -C \(worktree) status --porcelain) || dirty=unknown
+        unpushed=$(git -C \(worktree) log --oneline \(remoteBase)..HEAD) || unpushed=unknown
+        if [ -n "$dirty" ]; then
+          echo "Kept the worktree "\(worktree)" and branch "\(branch)": it has uncommitted changes."
+        elif [ -n "$unpushed" ]; then
+          echo "Kept the worktree "\(worktree)" and branch "\(branch)": it has commits not pushed to the PR."
+        else
+          git worktree remove --force \(worktree) && git branch -q -D \(branch) &&
+            echo "Removed the worktree "\(worktree)" and branch "\(branch)"."
+        fi
 
         """
     }

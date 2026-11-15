@@ -50,7 +50,7 @@ final class ClaudeResolveTests: XCTestCase {
         let ws = ResolveWorkspace(checkout: "/Users/me/code/zapp/", prNumber: 5092, base: "feat/x")
         XCTAssertEqual(ws.checkout, "/Users/me/code/zapp")
         XCTAssertEqual(ws.worktree, "/Users/me/code/zapp-pr-5092")
-        XCTAssertEqual(ws.branch, "pr-5092-review-fixes")
+        XCTAssertEqual(ws.branch, "claude/feat/x")
         XCTAssertEqual(ws.base, "feat/x")
     }
 
@@ -71,11 +71,11 @@ final class ClaudeResolveTests: XCTestCase {
         XCTAssertTrue(p.contains("link: https://github.com/o/r/pull/7#discussion_r1"))
         XCTAssertTrue(p.contains("comment: rename this"))
         XCTAssertTrue(p.contains("2. Copilot (Copilot)"))
-        XCTAssertTrue(p.contains("git worktree made for this: /c/r-pr-7, on branch `pr-7-review-fixes`"))
+        XCTAssertTrue(p.contains("git worktree made for this: /c/r-pr-7, on branch `claude/feat/x`"))
         XCTAssertTrue(p.contains("Don't touch my main checkout at /c/r"))
         XCTAssertTrue(p.contains("dependencies are already installed"))
         let simplify = p.range(of: "run the `/simplify` skill"), verify = p.range(of: "then the `/verify` skill")
-        let commit = p.range(of: "Then commit on `pr-7-review-fixes`")
+        let commit = p.range(of: "Then commit on `claude/feat/x`")
         XCTAssertNotNil(simplify); XCTAssertNotNil(verify); XCTAssertNotNil(commit)
         if let simplify, let verify, let commit {
             XCTAssertTrue(simplify.lowerBound < verify.lowerBound && verify.lowerBound < commit.lowerBound, "simplify, verify, then commit")
@@ -111,8 +111,9 @@ final class ClaudeResolveTests: XCTestCase {
     }
 
     /// Runs the generated script under zsh against a real local "origin" with a stub `claude`: the worktree is
-    /// created on the fix branch from the PR branch, reused on a second run, the user's checkout stays on its
-    /// branch, and the prompt arrives intact.
+    /// created on the fix branch from the PR branch with ignored files copied, reused on a later run, kept while
+    /// it has uncommitted or unpushed work and removed (with its branch) once everything is pushed. The user's
+    /// checkout stays on its branch and the prompt arrives intact.
     func testLaunchScriptCreatesWorktreeAndPassesPrompt() throws {
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let fm = FileManager.default
@@ -138,7 +139,9 @@ final class ClaudeResolveTests: XCTestCase {
             try f.write(to: u, atomically: true, encoding: .utf8)
         }
 
-        let out = tmp.appendingPathComponent("out.txt")
+        // The stub records where it ran, then acts per `mode`: leave the worktree dirty, commit without pushing,
+        // or commit and push to the PR branch.
+        let out = tmp.appendingPathComponent("out.txt"), mode = tmp.appendingPathComponent("mode")
         let stub = bin.appendingPathComponent("claude")
         try """
         #!/bin/sh
@@ -146,13 +149,20 @@ final class ClaudeResolveTests: XCTestCase {
         git branch --show-current >> '\(out.path)'
         git log -1 --format=%s >> '\(out.path)'
         printf '%s' "$1" >> '\(out.path)'
+        case "$(cat '\(mode.path)')" in
+          dirty) echo wip > wip.txt ;;
+          unpushed) git -c user.name=t -c user.email=t@t commit -q --allow-empty -m fix ;;
+          pushed) git -c user.name=t -c user.email=t@t commit -q --allow-empty -m fix2 && git push -q origin HEAD:feat/x ;;
+        esac
 
         """.write(to: stub, atomically: true, encoding: .utf8)
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stub.path)
 
         let ws = ResolveWorkspace(checkout: checkout.path, prNumber: 7, base: "feat/x")
+        let worktree = URL(fileURLWithPath: ws.worktree)
         let prompt = "it's \"quoted\" $HOME `x`\nline 2"
-        func launch() throws -> [String] {
+        func launch(_ m: String) throws -> [String] {
+            try m.write(to: mode, atomically: true, encoding: .utf8)
             let script = tmp.appendingPathComponent("run.command")
             // Swap the script's PATH line so only the stub can be found, never a real installed `claude`.
             let lines = ClaudeResolve.launchScript(ws, prompt: prompt)
@@ -164,18 +174,34 @@ final class ClaudeResolveTests: XCTestCase {
             XCTAssertFalse(fm.fileExists(atPath: script.path), "script removes itself")
             return try String(contentsOf: out, encoding: .utf8).components(separatedBy: "\n")
         }
-
-        for _ in 0..<2 {      // second run reuses the existing worktree
-            let o = try launch()
-            XCTAssertTrue(o[0].hasSuffix("/my repo-pr-7"), o[0])
-            XCTAssertEqual(o[1], "pr-7-review-fixes")
-            XCTAssertEqual(o[2], "pr work")
-            XCTAssertEqual(o.dropFirst(3).joined(separator: "\n"), prompt)
+        func branchExists() throws -> Bool {
+            try run("/usr/bin/git", ["-C", checkout.path, "rev-parse", "--verify", "-q", "refs/heads/claude/feat/x"]) == 0
         }
-        let worktree = URL(fileURLWithPath: ws.worktree)
+
+        // 1. Uncommitted changes: worktree and branch are kept.
+        var o = try launch("dirty")
+        XCTAssertTrue(o[0].hasSuffix("/my repo-pr-7"), o[0])
+        XCTAssertEqual(o[1], "claude/feat/x")
+        XCTAssertEqual(o[2], "pr work")
+        XCTAssertEqual(o.dropFirst(3).joined(separator: "\n"), prompt)
         for f in ignored {
             XCTAssertEqual(try? String(contentsOf: worktree.appendingPathComponent(f), encoding: .utf8), f, "copied \(f)")
         }
+        XCTAssertTrue(fm.fileExists(atPath: ws.worktree), "kept: uncommitted changes")
+        XCTAssertTrue(try branchExists())
+
+        // 2. Reused, committed but not pushed: still kept.
+        try fm.removeItem(at: worktree.appendingPathComponent("wip.txt"))
+        o = try launch("unpushed")
+        XCTAssertTrue(o[0].hasSuffix("/my repo-pr-7"), o[0])
+        XCTAssertTrue(fm.fileExists(atPath: ws.worktree), "kept: unpushed commit")
+        XCTAssertTrue(try branchExists())
+
+        // 3. Everything pushed to the PR branch: worktree removed and branch deleted.
+        _ = try launch("pushed")
+        XCTAssertFalse(fm.fileExists(atPath: ws.worktree), "removed after a clean, pushed run")
+        XCTAssertFalse(try branchExists())
+
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         p.arguments = ["-C", checkout.path, "branch", "--show-current"]
